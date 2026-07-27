@@ -195,21 +195,24 @@ class AutoResearchEvidenceValidationTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 422)
         self.assertIn("traceable", str(raised.exception.detail))
 
-    def test_snapshot_evidence_rejects_fabricated_source_backed_narrative_claim(self):
+    def test_snapshot_evidence_sanitizes_fabricated_source_backed_narrative_claim(self):
         from backend.app.main import _validate_snapshot_evidence
 
-        with self.assertRaises(HTTPException) as raised:
-            _validate_snapshot_evidence(
-                {
-                    "core_view": "\u516c\u53f8\u5df2\u62ff\u5230\u91cd\u5927\u8ba2\u5355\uff0c\u653f\u7b56\u63a8\u52a8\u6536\u5165\u9ad8\u589e",
-                    "business_basics": ["\u5ba2\u6237\u4e3b\u8981\u662f\u5730\u65b9\u653f\u5e9c"],
-                    "policy_order_chain": ["\u516c\u544a\u539f\u6587\u663e\u793a\u8ba2\u5355\u5df2\u8f6c\u5316\u4e3a\u6536\u5165"],
-                    "evidence": [],
-                },
-                {"evidence_library": {"items": [{"title": "\u65e5\u5e38\u7ecf\u8425\u516c\u544a", "snippets": [{"quote": "\u516c\u53f8\u65e5\u5e38\u7ecf\u8425\u60c5\u51b5\u6b63\u5e38"}]}]}},
-            )
-        self.assertEqual(raised.exception.status_code, 422)
-        self.assertIn("narrative", str(raised.exception.detail))
+        report = {
+            "core_view": "\u516c\u53f8\u5df2\u62ff\u5230\u91cd\u5927\u8ba2\u5355\uff0c\u653f\u7b56\u63a8\u52a8\u6536\u5165\u9ad8\u589e",
+            "business_basics": ["\u5ba2\u6237\u4e3b\u8981\u662f\u5730\u65b9\u653f\u5e9c"],
+            "policy_order_chain": ["\u516c\u544a\u539f\u6587\u663e\u793a\u8ba2\u5355\u5df2\u8f6c\u5316\u4e3a\u6536\u5165"],
+            "evidence": [],
+        }
+        _validate_snapshot_evidence(
+            report,
+            {"evidence_library": {"items": [{"title": "\u65e5\u5e38\u7ecf\u8425\u516c\u544a", "snippets": [{"quote": "\u516c\u53f8\u65e5\u5e38\u7ecf\u8425\u60c5\u51b5\u6b63\u5e38"}]}]}},
+        )
+
+        self.assertIn("\u6570\u636e\u4e0d\u8db3", report["core_view"])
+        self.assertIn("\u6570\u636e\u4e0d\u8db3", report["business_basics"][0])
+        self.assertIn("\u6570\u636e\u4e0d\u8db3", report["policy_order_chain"][0])
+        self.assertNotIn("\u6536\u5165\u9ad8\u589e", report["core_view"])
 
     def test_snapshot_evidence_allows_synthesized_narrative_with_evidence_overlap(self):
         from backend.app.main import _validate_snapshot_evidence

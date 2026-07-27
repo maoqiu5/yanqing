@@ -900,6 +900,34 @@ def _collect_report_narratives(report: dict[str, Any]) -> list[str]:
     return texts
 
 
+def _untraceable_narrative_gap() -> str:
+    return "数据不足：该叙述未能追溯到公告/财报原文证据，需补充来源后再判断。"
+
+
+def _sanitize_report_narratives(report: dict[str, Any], allowed_texts: list[str], has_items: bool) -> None:
+    def sanitize(value: Any) -> Any:
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return value
+            if not _source_backed_text(text):
+                return value
+            if _is_uncertain_or_gap_statement(text):
+                return value
+            if has_items and _high_risk_claim_is_grounded(text, allowed_texts):
+                return value
+            return _untraceable_narrative_gap()
+        if isinstance(value, list):
+            return [sanitize(item) for item in value]
+        if isinstance(value, dict):
+            return {key: sanitize(nested) for key, nested in value.items()}
+        return value
+
+    for field in SOURCE_BACKED_NARRATIVE_FIELDS:
+        if field in report:
+            report[field] = sanitize(report.get(field))
+
+
 def _source_backed_text(value: str) -> bool:
     haystack = value.lower()
     return any(term in haystack for term in SOURCE_BACKED_EVIDENCE_TERMS)
@@ -936,13 +964,7 @@ def _validate_snapshot_evidence(report: dict[str, Any], snapshot: dict[str, Any]
     items = items if isinstance(items, list) else []
     allowed_texts = _collect_evidence_texts(items)
 
-    for narrative in _collect_report_narratives(report):
-        if not _source_backed_text(narrative):
-            continue
-        if _is_uncertain_or_gap_statement(narrative):
-            continue
-        if not items or not _high_risk_claim_is_grounded(narrative, allowed_texts):
-            raise HTTPException(status_code=422, detail="AI narrative claim is not traceable to the snapshot evidence library")
+    _sanitize_report_narratives(report, allowed_texts, bool(items))
 
     for evidence in report.get("evidence") or []:
         source = str(evidence.get("source") or "")
