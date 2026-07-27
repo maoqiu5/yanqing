@@ -904,6 +904,10 @@ def _untraceable_narrative_gap() -> str:
     return "数据不足：该叙述未能追溯到公告/财报原文证据，需补充来源后再判断。"
 
 
+def _untraceable_evidence_note() -> str:
+    return "数据不足：该证据摘录未能追溯到快照证据库，已移除原摘录。"
+
+
 def _sanitize_report_narratives(report: dict[str, Any], allowed_texts: list[str], has_items: bool) -> None:
     def sanitize(value: Any) -> Any:
         if isinstance(value, str):
@@ -926,6 +930,28 @@ def _sanitize_report_narratives(report: dict[str, Any], allowed_texts: list[str]
     for field in SOURCE_BACKED_NARRATIVE_FIELDS:
         if field in report:
             report[field] = sanitize(report.get(field))
+
+
+def _sanitize_report_evidence(report: dict[str, Any], allowed_texts: list[str], has_items: bool) -> None:
+    sanitized: list[dict[str, Any]] = []
+    for evidence in report.get("evidence") or []:
+        if not isinstance(evidence, dict):
+            continue
+        item = dict(evidence)
+        source = str(item.get("source") or "")
+        quote = str(item.get("quote") or "").strip()
+        source_backed = _source_backed_text(f"{source} {quote}")
+        traceable = bool(quote and any(quote in text for text in allowed_texts))
+        structured = bool(quote and _is_exact_numeric_structured_evidence(source, quote))
+
+        if quote and not traceable and not structured:
+            item["quote"] = ""
+            item["note"] = _untraceable_evidence_note()
+        elif source_backed and not has_items:
+            item["quote"] = ""
+            item["note"] = _untraceable_evidence_note()
+        sanitized.append(item)
+    report["evidence"] = sanitized
 
 
 def _source_backed_text(value: str) -> bool:
@@ -966,15 +992,7 @@ def _validate_snapshot_evidence(report: dict[str, Any], snapshot: dict[str, Any]
 
     _sanitize_report_narratives(report, allowed_texts, bool(items))
 
-    for evidence in report.get("evidence") or []:
-        source = str(evidence.get("source") or "")
-        quote = str(evidence.get("quote") or "").strip()
-        source_backed = _source_backed_text(f"{source} {quote}")
-        if source_backed and not items:
-            raise HTTPException(status_code=422, detail="AI evidence claim is not traceable to the snapshot evidence library")
-        if quote and not any(quote in text for text in allowed_texts):
-            if not _is_exact_numeric_structured_evidence(source, quote):
-                raise HTTPException(status_code=422, detail="AI evidence quote is not traceable to the snapshot")
+    _sanitize_report_evidence(report, allowed_texts, bool(items))
 
 
 def _schema_hint() -> dict[str, Any]:

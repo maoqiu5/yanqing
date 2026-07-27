@@ -173,27 +173,38 @@ class AutoResearchEvidenceValidationTests(unittest.TestCase):
         self.assertTrue(_contains_trade_instruction({"core_view": "建议增持"}))
         self.assertTrue(_contains_trade_instruction({"core_view": "建议减持"}))
 
-    def test_snapshot_evidence_rejects_fabricated_cninfo_quote_without_library_items(self):
+    def test_snapshot_evidence_sanitizes_fabricated_cninfo_quote_without_library_items(self):
         from backend.app.main import _validate_snapshot_evidence
 
-        with self.assertRaises(HTTPException) as raised:
-            _validate_snapshot_evidence(
-                {"evidence": [{"source": "CNINFO公告/evidence_library", "quote": "公司已签订重大订单"}]},
-                {"evidence_library": {"items": []}},
-            )
-        self.assertEqual(raised.exception.status_code, 422)
-        self.assertIn("traceable", str(raised.exception.detail))
+        report = {"evidence": [{"source": "CNINFO\u516c\u544a/evidence_library", "quote": "\u516c\u53f8\u5df2\u7b7e\u8ba2\u91cd\u5927\u8ba2\u5355"}]}
+        _validate_snapshot_evidence(report, {"evidence_library": {"items": []}})
 
-    def test_snapshot_evidence_rejects_unmatched_cninfo_quote(self):
+        self.assertEqual(report["evidence"][0]["quote"], "")
+        self.assertIn("\u6570\u636e\u4e0d\u8db3", report["evidence"][0]["note"])
+
+    def test_snapshot_evidence_sanitizes_unmatched_cninfo_quote(self):
         from backend.app.main import _validate_snapshot_evidence
 
-        with self.assertRaises(HTTPException) as raised:
-            _validate_snapshot_evidence(
-                {"evidence": [{"source": "CNINFO公告", "quote": "虚构的重大订单"}]},
-                {"evidence_library": {"items": [{"title": "关于日常经营的公告", "snippets": [{"quote": "公司经营情况正常"}]}]}},
-            )
-        self.assertEqual(raised.exception.status_code, 422)
-        self.assertIn("traceable", str(raised.exception.detail))
+        report = {"evidence": [{"source": "CNINFO\u516c\u544a", "quote": "\u865a\u6784\u7684\u91cd\u5927\u8ba2\u5355"}]}
+        _validate_snapshot_evidence(
+            report,
+            {"evidence_library": {"items": [{"title": "\u5173\u4e8e\u65e5\u5e38\u7ecf\u8425\u7684\u516c\u544a", "snippets": [{"quote": "\u516c\u53f8\u7ecf\u8425\u60c5\u51b5\u6b63\u5e38"}]}]}},
+        )
+
+        self.assertEqual(report["evidence"][0]["quote"], "")
+        self.assertIn("\u6570\u636e\u4e0d\u8db3", report["evidence"][0]["note"])
+
+    def test_snapshot_evidence_keeps_traceable_cninfo_quote(self):
+        from backend.app.main import _validate_snapshot_evidence
+
+        report = {"evidence": [{"source": "CNINFO\u516c\u544a", "quote": "\u516c\u53f8\u7ecf\u8425\u60c5\u51b5\u6b63\u5e38", "note": "\u652f\u6301\u65e5\u5e38\u7ecf\u8425\u5224\u65ad"}]}
+        _validate_snapshot_evidence(
+            report,
+            {"evidence_library": {"items": [{"title": "\u5173\u4e8e\u65e5\u5e38\u7ecf\u8425\u7684\u516c\u544a", "snippets": [{"quote": "\u516c\u53f8\u7ecf\u8425\u60c5\u51b5\u6b63\u5e38"}]}]}},
+        )
+
+        self.assertEqual(report["evidence"][0]["quote"], "\u516c\u53f8\u7ecf\u8425\u60c5\u51b5\u6b63\u5e38")
+        self.assertEqual(report["evidence"][0]["note"], "\u652f\u6301\u65e5\u5e38\u7ecf\u8425\u5224\u65ad")
 
     def test_snapshot_evidence_sanitizes_fabricated_source_backed_narrative_claim(self):
         from backend.app.main import _validate_snapshot_evidence
