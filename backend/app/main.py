@@ -822,6 +822,33 @@ def _validate_report(payload: dict[str, Any]) -> dict[str, Any]:
 
 SOURCE_BACKED_EVIDENCE_TERMS = ("cninfo", "公告", "原文", "evidence_library", "订单", "政策", "客户", "财报", "年报", "季报")
 UNCERTAIN_RESEARCH_TERMS = ("数据不足", "核实", "待确认", "需确认", "跟踪", "是否", "?", "？")
+SIGNIFICANT_EVIDENCE_TERMS = (
+    "审计报告",
+    "年度报告",
+    "半年度报告",
+    "季度报告",
+    "法律意见书",
+    "财报",
+    "财务报表",
+    "营业收入",
+    "净利润",
+    "经营现金流",
+    "应收账款",
+    "合同资产",
+    "存货",
+    "减值",
+    "毛利率",
+    "净利率",
+    "订单",
+    "合同",
+    "中标",
+    "客户",
+    "政策",
+    "回款",
+    "收入",
+    "利润",
+    "现金流",
+)
 SOURCE_BACKED_NARRATIVE_FIELDS = (
     "core_view",
     "business_basics",
@@ -886,6 +913,7 @@ def _high_risk_claim_is_grounded(value: str, allowed_texts: list[str]) -> bool:
     normalized = value.strip()
     if not normalized:
         return True
+    narrative_terms = {term for term in SIGNIFICANT_EVIDENCE_TERMS if term in normalized}
     for evidence_text in allowed_texts:
         evidence = str(evidence_text or "").strip()
         if not evidence:
@@ -893,6 +921,11 @@ def _high_risk_claim_is_grounded(value: str, allowed_texts: list[str]) -> bool:
         if normalized in evidence:
             return True
         if len(evidence) >= 8 and evidence in normalized:
+            return True
+        shared_terms = {term for term in narrative_terms if term in evidence}
+        if len(shared_terms) >= 2:
+            return True
+        if shared_terms & {"审计报告", "年度报告", "半年度报告", "季度报告", "法律意见书"}:
             return True
     return False
 

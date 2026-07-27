@@ -211,6 +211,25 @@ class AutoResearchEvidenceValidationTests(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 422)
         self.assertIn("narrative", str(raised.exception.detail))
 
+    def test_snapshot_evidence_allows_synthesized_narrative_with_evidence_overlap(self):
+        from backend.app.main import _validate_snapshot_evidence
+
+        _validate_snapshot_evidence(
+            {
+                "core_view": "\u5ba1\u8ba1\u62a5\u544a\u548c\u8d22\u62a5\u7247\u6bb5\u663e\u793a\uff0c\u516c\u53f8\u5e94\u6536\u8d26\u6b3e\u4e0e\u7ecf\u8425\u73b0\u91d1\u6d41\u662f\u6838\u5fc3\u8ddf\u8e2a\u77db\u76fe\u3002",
+                "financial_diagnosis": ["\u8d22\u62a5\u6570\u636e\u6307\u5411\u5e94\u6536\u8d26\u6b3e\u548c\u7ecf\u8425\u73b0\u91d1\u6d41\u9700\u7ee7\u7eed\u9a8c\u8bc1\u3002"],
+                "evidence": [],
+            },
+            {"evidence_library": {"items": [{
+                "title": "\u9707\u5b89\u79d1\u6280\u80a1\u4efd\u6709\u9650\u516c\u53f82025\u5e74\u5ea6\u5ba1\u8ba1\u62a5\u544a",
+                "category": "annual_report",
+                "snippets": [
+                    {"quote": "\u5e94\u6536\u8d26\u6b3e\u4f59\u989d\u4e0e\u7ecf\u8425\u73b0\u91d1\u6d41\u60c5\u51b5\u9700\u5173\u6ce8"},
+                    {"quote": "\u8d22\u62a5\u62ab\u9732\u8425\u4e1a\u6536\u5165\u53ca\u51c0\u5229\u6da6\u53d8\u52a8"},
+                ],
+            }]}}
+        )
+
     def test_snapshot_evidence_allows_source_backed_narrative_when_marked_insufficient(self):
         from backend.app.main import _validate_snapshot_evidence
 
