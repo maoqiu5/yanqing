@@ -228,6 +228,26 @@ class EvidenceStorageTests(unittest.TestCase):
 
 
 class AutoResearchEvidenceValidationTests(unittest.TestCase):
+    def test_snapshot_evidence_adds_display_summary_for_downgraded_quotes(self):
+        from backend.app.main import _validate_snapshot_evidence
+
+        report = {
+            "evidence": [
+                {"source": "CNINFO\u516c\u544a", "quote": "\u865a\u6784\u7684\u91cd\u5927\u8ba2\u5355"},
+                {"source": "CNINFO\u516c\u544a", "quote": "\u516c\u53f8\u7ecf\u8425\u60c5\u51b5\u6b63\u5e38", "note": "\u53ef\u8ffd\u6eaf"},
+                {"source": "financials.cashflow", "quote": "99798188.68", "note": "\u7ed3\u6784\u5316\u6570\u503c"},
+            ]
+        }
+        _validate_snapshot_evidence(
+            report,
+            {"evidence_library": {"items": [{"title": "\u516c\u544a", "snippets": [{"quote": "\u516c\u53f8\u7ecf\u8425\u60c5\u51b5\u6b63\u5e38"}]}]}},
+        )
+
+        self.assertEqual(report["evidence_display"]["downgraded_count"], 1)
+        self.assertEqual(len(report["evidence_display"]["items"]), 2)
+        self.assertEqual(report["evidence_display"]["items"][0]["quote"], "\u516c\u53f8\u7ecf\u8425\u60c5\u51b5\u6b63\u5e38")
+        self.assertEqual(report["evidence_display"]["items"][1]["quote"], "99798188.68")
+
     def test_trade_instruction_blocks_increase_and_reduce_holdings(self):
         from backend.app.main import _contains_trade_instruction
 

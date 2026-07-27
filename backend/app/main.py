@@ -57,6 +57,11 @@ class EvidenceItem(BaseModel):
     note: str = ""
 
 
+class EvidenceDisplay(BaseModel):
+    items: list[EvidenceItem] = Field(default_factory=list)
+    downgraded_count: int = 0
+
+
 class EvidenceRefreshRequest(BaseModel):
     limit: int = Field(default=20, ge=1, le=50)
     days: int = Field(default=720, ge=1, le=3650)
@@ -104,6 +109,7 @@ class ResearchReport(BaseModel):
     research_questions: list[str] = Field(default_factory=list)
     tracking_triggers: list[str] = Field(default_factory=list)
     evidence: list[EvidenceItem] = Field(default_factory=list)
+    evidence_display: EvidenceDisplay = Field(default_factory=EvidenceDisplay)
 
 
 class PortalAiConfig(BaseModel):
@@ -1076,6 +1082,24 @@ def _sanitize_report_evidence(report: dict[str, Any], allowed_texts: list[str], 
     report["evidence"] = sanitized
 
 
+def _build_evidence_display(report: dict[str, Any]) -> None:
+    items: list[dict[str, Any]] = []
+    downgraded_count = 0
+    downgrade_note = _untraceable_evidence_note()
+
+    for evidence in report.get("evidence") or []:
+        if not isinstance(evidence, dict):
+            continue
+        quote = str(evidence.get("quote") or "").strip()
+        note = str(evidence.get("note") or "").strip()
+        if quote:
+            items.append(evidence)
+        elif note == downgrade_note:
+            downgraded_count += 1
+
+    report["evidence_display"] = {"items": items, "downgraded_count": downgraded_count}
+
+
 def _source_backed_text(value: str) -> bool:
     haystack = value.lower()
     return any(term in haystack for term in SOURCE_BACKED_EVIDENCE_TERMS)
@@ -1115,6 +1139,7 @@ def _validate_snapshot_evidence(report: dict[str, Any], snapshot: dict[str, Any]
     _sanitize_report_narratives(report, allowed_texts, bool(items))
 
     _sanitize_report_evidence(report, allowed_texts, bool(items))
+    _build_evidence_display(report)
 
 
 def _schema_hint() -> dict[str, Any]:

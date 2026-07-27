@@ -1,5 +1,13 @@
 # Yanqing CHANGELOG
 
+## 2026-07-27 v1.6
+
+- Added `report.evidence_display` as a UI-oriented evidence-chain view that keeps traceable quotes and counts downgraded untraceable evidence.
+- Updated the frontend evidence-chain section to hide empty downgraded cards and show a compact downgraded-evidence notice instead.
+- Added historical-report fallback so existing reports can render a cleaner evidence chain without regeneration.
+- Impact: backend report payload shape, frontend report rendering, and evidence-chain usability.
+- Verification: local syntax check and VPS container backend unit tests.
+
 ## 2026-07-27 v1.5
 
 - Added `evidence_digest` to reuse already collected CNINFO snippets and financial snapshot metrics.
