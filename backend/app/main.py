@@ -317,9 +317,9 @@ def build_company_snapshot(ts_code: str) -> dict[str, Any]:
     dividend = collect_tushare("dividend", {"ts_code": ts_code}, "ts_code,end_date,ann_date,div_proc,stk_div,stk_bo_rate,stk_co_rate,cash_div,cash_div_tax,record_date,ex_date,pay_date", failures, limit=8)
     pledge = collect_tushare("pledge_stat", {"ts_code": ts_code}, "ts_code,end_date,pledge_count,unrest_pledge,rest_pledge,total_share,pledge_ratio", failures, limit=8)
     quote = sina_quote(ts_code)
-    evidence_library = build_evidence_library(ts_code, refresh=True, limit=20, days=720)
     derived = derive_research_metrics(income, balance, cashflow, indicators, daily_basic)
-    return {
+    evidence_library = build_evidence_library(ts_code, refresh=True, limit=20, days=720)
+    snapshot = {
         "schema_version": 2,
         "generated_at": datetime.now(timezone.utc).isoformat(),
         "ticker": ts_code,
@@ -337,6 +337,8 @@ def build_company_snapshot(ts_code: str) -> dict[str, Any]:
             "tracking_triggers": ["新订单连续恢复", "经营现金流持续为正", "应收账款/合同资产下降", "毛利率修复", "减值减少", "政策进入地方预算"],
         },
     }
+    snapshot["evidence_digest"] = build_evidence_digest(snapshot)
+    return snapshot
 
 
 def derive_research_metrics(income: list[dict[str, Any]], balance: list[dict[str, Any]], cashflow: list[dict[str, Any]], indicators: list[dict[str, Any]], daily_basic: list[dict[str, Any]]) -> dict[str, Any]:
@@ -761,6 +763,126 @@ def build_evidence_library(ticker: str, refresh: bool = True, limit: int = 20, d
         data_gaps=refresh_gaps if items else list(dict.fromkeys(refresh_gaps + [_data_gap("公告原文数据不足")])),
     )
     return library.model_dump(mode="json")
+
+
+EVIDENCE_DIGEST_TOPICS = (
+    ("revenue", "收入", ("营业收入", "收入", "营收")),
+    ("profit", "利润", ("净利润", "利润", "毛利率", "净利率")),
+    ("cashflow", "经营现金流", ("经营现金流", "现金流", "回款")),
+    ("receivables", "应收与合同资产", ("应收账款", "合同资产", "回款")),
+    ("impairment", "减值", ("减值", "坏账", "信用损失")),
+    ("inventory", "存货", ("存货", "库存")),
+    ("orders", "订单/合同", ("订单", "合同", "中标", "重大项目")),
+    ("policy", "政策传导", ("政策", "预算", "专项债", "住建", "发改")),
+    ("risk", "风险/监管", ("风险", "诉讼", "监管", "问询", "处罚")),
+    ("legal", "法律意见", ("法律意见书", "律师", "合规", "发行股票")),
+)
+
+
+def build_evidence_digest(snapshot: dict[str, Any]) -> dict[str, Any]:
+    library = snapshot.get("evidence_library") or {}
+    items = library.get("items") if isinstance(library, dict) else []
+    items = items if isinstance(items, list) else []
+    digest_items: list[dict[str, Any]] = []
+
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        title = str(item.get("title") or "")
+        snippets = item.get("snippets") if isinstance(item.get("snippets"), list) else []
+        text_chunks = [title] + [str(snippet.get("quote") or "") for snippet in snippets if isinstance(snippet, dict)]
+        for chunk in text_chunks:
+            topics = evidence_topics_for_text(chunk)
+            if not topics:
+                continue
+            for topic, label in topics:
+                digest_items.append({
+                    "topic": topic,
+                    "label": label,
+                    "source": title or "公告原文",
+                    "quote": chunk[:240],
+                    "evidence_id": str(item.get("evidence_id") or ""),
+                    "date": str(item.get("announcement_date") or ""),
+                    "category": str(item.get("category") or "other"),
+                })
+
+    financial_facts = build_financial_digest_facts(snapshot)
+    digest_topics = {str(item.get("topic")) for item in digest_items}
+    open_questions = build_digest_open_questions(digest_topics, financial_facts)
+    data_gaps = list(library.get("data_gaps") or []) if isinstance(library, dict) else []
+    data_gaps.extend(question for question in open_questions if "数据不足" in question)
+    deduped_items = dedupe_digest_items(digest_items)
+    status = "ready" if deduped_items or financial_facts else ("limited" if items else "insufficient")
+    return {
+        "status": status,
+        "items": deduped_items[:30],
+        "financial_facts": financial_facts,
+        "open_questions": open_questions,
+        "data_gaps": list(dict.fromkeys(str(gap) for gap in data_gaps if str(gap).strip())),
+    }
+
+
+def evidence_topics_for_text(text: str) -> list[tuple[str, str]]:
+    found: list[tuple[str, str]] = []
+    for topic, label, keywords in EVIDENCE_DIGEST_TOPICS:
+        if any(keyword in text for keyword in keywords):
+            found.append((topic, label))
+    return found
+
+
+def dedupe_digest_items(items: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    deduped: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for item in items:
+        key = (str(item.get("topic") or ""), str(item.get("source") or ""), str(item.get("quote") or ""))
+        if key[0] and key[2]:
+            deduped[key] = item
+    return list(deduped.values())
+
+
+def build_financial_digest_facts(snapshot: dict[str, Any]) -> list[dict[str, str]]:
+    derived = snapshot.get("derived") if isinstance(snapshot.get("derived"), dict) else {}
+    facts: list[dict[str, str]] = []
+    latest_period = str(derived.get("latest_period") or "数据不足")
+    cashflow = derived.get("cashflow") if isinstance(derived.get("cashflow"), dict) else {}
+    balance_quality = derived.get("balance_quality") if isinstance(derived.get("balance_quality"), dict) else {}
+    valuation = derived.get("valuation") if isinstance(derived.get("valuation"), dict) else {}
+    profitability = derived.get("profitability") if isinstance(derived.get("profitability"), dict) else {}
+
+    cash_obs = compact_kv(cashflow, ("n_cashflow_act", "ocfps"))
+    if cash_obs:
+        facts.append({"topic": "cashflow", "label": "经营现金流", "period": latest_period, "observation": cash_obs})
+    balance_obs = compact_kv(balance_quality, ("accounts_receiv", "contract_assets", "inventories", "debt_to_assets"))
+    if balance_obs:
+        facts.append({"topic": "receivables", "label": "资产质量", "period": latest_period, "observation": balance_obs})
+    valuation_obs = compact_kv(valuation, ("pe_ttm", "pb", "total_mv", "circ_mv"))
+    if valuation_obs:
+        facts.append({"topic": "valuation", "label": "估值", "period": latest_period, "observation": valuation_obs})
+    profit_obs = compact_kv(profitability, ("grossprofit_margin", "netprofit_margin", "roe", "roic"))
+    if profit_obs:
+        facts.append({"topic": "profit", "label": "盈利质量", "period": latest_period, "observation": profit_obs})
+    return facts
+
+
+def compact_kv(payload: dict[str, Any], keys: tuple[str, ...]) -> str:
+    parts = []
+    for key in keys:
+        value = payload.get(key)
+        if value not in (None, ""):
+            parts.append(f"{key}: {value}")
+    return "；".join(parts)
+
+
+def build_digest_open_questions(topics: set[str], financial_facts: list[dict[str, str]]) -> list[str]:
+    questions = []
+    if "orders" not in topics:
+        questions.append("订单数据不足：当前公告原文未提供可追溯订单/合同/中标证据。")
+    if "policy" not in topics:
+        questions.append("政策数据不足：当前证据库未提供可追溯政策落地证据。")
+    if "receivables" in topics or any(fact.get("topic") == "receivables" for fact in financial_facts):
+        questions.append("继续核实应收账款、合同资产与回款节奏是否匹配收入确认。")
+    if "cashflow" in topics or any(fact.get("topic") == "cashflow" for fact in financial_facts):
+        questions.append("继续核实经营现金流是否持续修复。")
+    return questions
 
 
 def _fetch_portal_ai_config() -> PortalAiConfig:

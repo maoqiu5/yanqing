@@ -73,6 +73,67 @@ class SnapshotEvidenceTests(unittest.TestCase):
             main.collect_tushare = original_collect
             main.sina_quote = original_sina
 
+    def test_build_evidence_digest_uses_existing_cninfo_and_financial_data(self):
+        from backend.app.main import build_evidence_digest
+
+        snapshot = {
+            "evidence_library": {
+                "status": "ready",
+                "items": [{
+                    "evidence_id": "e1",
+                    "title": "\u9707\u5b89\u79d1\u62802025\u5e74\u5ea6\u5ba1\u8ba1\u62a5\u544a",
+                    "announcement_date": "2026-04-20",
+                    "category": "annual_report",
+                    "snippets": [
+                        {"quote": "\u5e94\u6536\u8d26\u6b3e\u4e0e\u7ecf\u8425\u73b0\u91d1\u6d41\u60c5\u51b5\u9700\u5173\u6ce8"},
+                        {"quote": "\u8425\u4e1a\u6536\u5165\u548c\u51c0\u5229\u6da6\u51fa\u73b0\u53d8\u52a8"},
+                    ],
+                }]
+            },
+            "derived": {
+                "latest_period": "20251231",
+                "cashflow": {"n_cashflow_act": -120000000},
+                "balance_quality": {"accounts_receiv": 450000000, "contract_assets": 230000000},
+                "valuation": {"pe_ttm": 12.3, "pb": 1.5},
+            },
+        }
+
+        digest = build_evidence_digest(snapshot)
+
+        self.assertEqual(digest["status"], "ready")
+        self.assertTrue(any(item["topic"] == "receivables" for item in digest["items"]))
+        self.assertTrue(any(item["topic"] == "cashflow" for item in digest["items"]))
+        self.assertTrue(any(fact["topic"] == "cashflow" for fact in digest["financial_facts"]))
+        self.assertTrue(any("\u8ba2\u5355\u6570\u636e\u4e0d\u8db3" in question for question in digest["open_questions"]))
+
+    def test_snapshot_includes_evidence_digest(self):
+        import backend.app.main as main
+
+        original_build = main.build_evidence_library
+        original_stock_basic = main.stock_basic_cache
+        original_collect = main.collect_tushare
+        original_sina = main.sina_quote
+        try:
+            main.build_evidence_library = lambda ticker, refresh=True, limit=20, days=720: {
+                "status": "ready",
+                "items": [{"title": "\u5ba1\u8ba1\u62a5\u544a", "snippets": [{"quote": "\u7ecf\u8425\u73b0\u91d1\u6d41\u9700\u5173\u6ce8"}]}],
+                "data_gaps": [],
+            }
+            main.stock_basic_cache = lambda: []
+            main.collect_tushare = lambda api_name, params, fields, failures, limit=10: []
+            main.sina_quote = lambda ticker: {"source": "Sina", "status": "empty"}
+
+            snapshot = main.build_company_snapshot("300767.SZ")
+
+            self.assertIn("evidence_digest", snapshot)
+            self.assertIn("items", snapshot["evidence_digest"])
+            self.assertIn("open_questions", snapshot["evidence_digest"])
+        finally:
+            main.build_evidence_library = original_build
+            main.stock_basic_cache = original_stock_basic
+            main.collect_tushare = original_collect
+            main.sina_quote = original_sina
+
 
 class EvidenceStorageTests(unittest.TestCase):
     def test_classifies_announcement_titles_conservatively(self):

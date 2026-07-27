@@ -1,5 +1,14 @@
 # Yanqing CHANGELOG
 
+## 2026-07-27 v1.5
+
+- Added `evidence_digest` to reuse already collected CNINFO snippets and financial snapshot metrics.
+- Added topic tagging for revenue, profit, cash flow, receivables, contract assets, impairment, orders, policy, risk, and legal evidence.
+- Added digest open questions so missing order/policy support becomes an explicit `数据不足` follow-up rather than wasted data.
+- Added frontend display for digest financial facts, source-backed snippets, and follow-up questions.
+- Impact: auto-research snapshots, AI context, frontend evidence display, and project documentation.
+- Verification: local syntax checks and VPS container tests.
+
 ## 2026-07-27 v1.4
 
 - Added automatic CNINFO evidence collection for announcement and financial-report source documents.
