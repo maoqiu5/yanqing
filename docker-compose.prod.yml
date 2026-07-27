@@ -1,0 +1,26 @@
+﻿name: brianhub-yanqing
+
+services:
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    environment:
+      YANQING_DATA_DIR: /app/data
+      TUSHARE_TOKEN: ${TUSHARE_TOKEN:-}
+      PORTAL_AI_CONFIG_URL: ${PORTAL_AI_CONFIG_URL:-http://portal_frontend:3000/internal/ai-config}
+      PORTAL_INTERNAL_TOKEN: ${PORTAL_INTERNAL_TOKEN}
+      CORS_ALLOW_ORIGINS: ${PUBLIC_URL:-https://brianhub.net}
+    volumes:
+      - ./data:/app/data
+    networks:
+      brianhub_edge:
+        aliases:
+          - yanqing_app
+
+networks:
+  brianhub_edge:
+    name: brianhub_edge
+    external: true
+

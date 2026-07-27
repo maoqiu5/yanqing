@@ -1,0 +1,35 @@
+# Dependencies and package stores
+node_modules/
+.pnpm-store/
+.venv/
+venv/
+
+# Codex / agent scratch state
+.codex/
+.codex-*/
+.work/
+.superpowers/
+
+# Runtime and generated data
+data/
+logs/
+runtime/
+backups/
+secrets/
+__pycache__/
+*.py[cod]
+
+# Environment and secrets
+.env
+.env.*
+!.env.production.example
+
+# Databases
+*.sqlite
+*.sqlite-shm
+*.sqlite-wal
+
+# Backups and pre-change copies
+*.bak
+*.backup-*
+*.pre-*
