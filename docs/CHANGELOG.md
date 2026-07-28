@@ -1,5 +1,12 @@
 # Yanqing CHANGELOG
 
+## 2026-07-27 v1.7
+
+- Added the planned `contradiction_matrix` report layer for claim/support/opposition/gap/trigger comparison.
+- Added documentation for the V1.7 evidence-matrix iteration.
+- Impact: report schema, AI prompt, frontend report rendering, and project documentation.
+- Verification: local syntax check, VPS container backend unit tests, internal payload fallback check, health check, SSO redirect checks, and browser UI verification.
+
 ## 2026-07-27 v1.6
 
 - Added `report.evidence_display` as a UI-oriented evidence-chain view that keeps traceable quotes and counts downgraded untraceable evidence.

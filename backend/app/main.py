@@ -62,6 +62,14 @@ class EvidenceDisplay(BaseModel):
     downgraded_count: int = 0
 
 
+class ContradictionMatrixRow(BaseModel):
+    claim: str = "数据不足"
+    supporting_evidence: list[str] = Field(default_factory=list)
+    opposing_evidence: list[str] = Field(default_factory=list)
+    data_gaps: list[str] = Field(default_factory=list)
+    tracking_triggers: list[str] = Field(default_factory=list)
+
+
 class EvidenceRefreshRequest(BaseModel):
     limit: int = Field(default=20, ge=1, le=50)
     days: int = Field(default=720, ge=1, le=3650)
@@ -110,6 +118,7 @@ class ResearchReport(BaseModel):
     tracking_triggers: list[str] = Field(default_factory=list)
     evidence: list[EvidenceItem] = Field(default_factory=list)
     evidence_display: EvidenceDisplay = Field(default_factory=EvidenceDisplay)
+    contradiction_matrix: list[ContradictionMatrixRow] = Field(default_factory=list)
 
 
 class PortalAiConfig(BaseModel):
@@ -943,9 +952,66 @@ def _validate_report(payload: dict[str, Any]) -> dict[str, Any]:
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail="AI output schema validation failed") from exc
     report_dict = report.model_dump(mode="json")
+    report_dict["contradiction_matrix"] = build_contradiction_matrix(report_dict)
     if _contains_trade_instruction(report_dict):
         raise HTTPException(status_code=422, detail="AI output contains direct trade instruction")
     return report_dict
+
+
+def _clean_text_items(items: Any, limit: int = 5) -> list[str]:
+    if not isinstance(items, list):
+        return []
+    cleaned: list[str] = []
+    for item in items:
+        text = str(item or "").strip()
+        if text and text not in cleaned:
+            cleaned.append(text)
+        if len(cleaned) >= limit:
+            break
+    return cleaned
+
+
+def build_contradiction_matrix(report: dict[str, Any]) -> list[dict[str, Any]]:
+    existing = report.get("contradiction_matrix")
+    if isinstance(existing, list) and existing:
+        rows: list[dict[str, Any]] = []
+        for row in existing[:5]:
+            if not isinstance(row, dict):
+                continue
+            rows.append({
+                "claim": str(row.get("claim") or "数据不足").strip() or "数据不足",
+                "supporting_evidence": _clean_text_items(row.get("supporting_evidence")),
+                "opposing_evidence": _clean_text_items(row.get("opposing_evidence")),
+                "data_gaps": _clean_text_items(row.get("data_gaps")),
+                "tracking_triggers": _clean_text_items(row.get("tracking_triggers")),
+            })
+        if rows:
+            return rows
+
+    contradiction = report.get("investment_contradiction")
+    contradiction = contradiction if isinstance(contradiction, dict) else {}
+    claim = str(contradiction.get("summary") or report.get("core_view") or "数据不足").strip() or "数据不足"
+    supporting = _clean_text_items(contradiction.get("positive"), limit=4)
+    supporting.extend(item for item in _clean_text_items(report.get("financial_diagnosis"), limit=2) if item not in supporting)
+    opposing = _clean_text_items(contradiction.get("negative"), limit=4)
+    opposing.extend(item for item in _clean_text_items(report.get("risks_and_disconfirming_evidence"), limit=2) if item not in opposing)
+    gaps = _clean_text_items(report.get("policy_order_chain"), limit=3)
+    key_question = str(contradiction.get("key_question") or "").strip()
+    if key_question and key_question not in gaps:
+        gaps.insert(0, key_question)
+    if not gaps:
+        gaps = ["数据不足：核心矛盾仍需补充可追溯来源"]
+    triggers = _clean_text_items(report.get("tracking_triggers"), limit=5)
+    if not triggers:
+        triggers = ["数据不足：缺少明确跟踪触发器"]
+
+    return [{
+        "claim": claim,
+        "supporting_evidence": supporting or ["数据不足：缺少支持证据"],
+        "opposing_evidence": opposing or ["数据不足：缺少反向证据"],
+        "data_gaps": gaps,
+        "tracking_triggers": triggers,
+    }]
 
 
 SOURCE_BACKED_EVIDENCE_TERMS = ("cninfo", "公告", "原文", "evidence_library", "订单", "政策", "客户", "财报", "年报", "季报")
@@ -1155,6 +1221,13 @@ def _schema_hint() -> dict[str, Any]:
         "research_questions": ["人工继续核实的问题"],
         "tracking_triggers": ["未来1-3个季度触发器"],
         "evidence": [{"source": "evidence_library.items中的来源或数据源/字段", "quote": "仅填写快照中存在的短摘录或数值", "note": "如何支持结论；缺少原文或来源时写数据不足，不得编造公告、订单、政策、客户或财务事实"}],
+        "contradiction_matrix": [{
+            "claim": "研究命题，例如收入修复能否转化为利润和现金流",
+            "supporting_evidence": ["支持命题的可追溯证据或结构化财务事实"],
+            "opposing_evidence": ["反向证据、风险或反证"],
+            "data_gaps": ["缺少的公告、订单、政策、客户、财报原文字段或仍需核实的问题"],
+            "tracking_triggers": ["未来1-3个季度应观察的触发器"],
+        }],
     }
 
 

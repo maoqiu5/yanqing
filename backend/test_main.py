@@ -228,6 +228,28 @@ class EvidenceStorageTests(unittest.TestCase):
 
 
 class AutoResearchEvidenceValidationTests(unittest.TestCase):
+    def test_build_contradiction_matrix_falls_back_from_report_sections(self):
+        from backend.app.main import build_contradiction_matrix
+
+        matrix = build_contradiction_matrix({
+            "investment_contradiction": {
+                "summary": "\u6536\u5165\u4fee\u590d\u80fd\u5426\u8f6c\u5316\u4e3a\u5229\u6da6\u548c\u73b0\u91d1\u6d41",
+                "positive": ["2025\u5e74\u8425\u4e1a\u6536\u5165\u6062\u590d"],
+                "negative": ["2026Q1\u6536\u5165\u4e0b\u6ed1"],
+                "key_question": "\u5e94\u6536\u8d26\u6b3e\u56de\u6b3e\u662f\u5426\u53ef\u6301\u7eed",
+            },
+            "financial_diagnosis": ["\u7ecf\u8425\u73b0\u91d1\u6d41\u660e\u663e\u597d\u4e8e\u5229\u6da6"],
+            "risks_and_disconfirming_evidence": ["\u4ecd\u5b58\u5728\u51cf\u503c\u98ce\u9669"],
+            "tracking_triggers": ["\u6bdb\u5229\u7387\u56de\u5347", "\u5e94\u6536\u7ee7\u7eed\u4e0b\u964d"],
+        })
+
+        self.assertEqual(len(matrix), 1)
+        self.assertIn("\u6536\u5165\u4fee\u590d", matrix[0]["claim"])
+        self.assertIn("2025\u5e74\u8425\u4e1a\u6536\u5165\u6062\u590d", matrix[0]["supporting_evidence"])
+        self.assertIn("2026Q1\u6536\u5165\u4e0b\u6ed1", matrix[0]["opposing_evidence"])
+        self.assertIn("\u5e94\u6536\u8d26\u6b3e\u56de\u6b3e\u662f\u5426\u53ef\u6301\u7eed", matrix[0]["data_gaps"])
+        self.assertIn("\u6bdb\u5229\u7387\u56de\u5347", matrix[0]["tracking_triggers"])
+
     def test_snapshot_evidence_adds_display_summary_for_downgraded_quotes(self):
         from backend.app.main import _validate_snapshot_evidence
 
