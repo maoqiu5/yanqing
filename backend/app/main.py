@@ -27,6 +27,9 @@ CACHE_DIR = DATA_DIR / "cache"
 EVIDENCE_DIR = DATA_DIR / "evidence"
 TUSHARE_API_URL = os.getenv("TUSHARE_API_URL", "http://api.tushare.pro")
 TRADE_ACTION_WORDS = ("买入", "卖出", "加仓", "减仓", "增持", "减持", "清仓", "建仓", "满仓", "梭哈", "抄底", "止盈", "止损")
+TRADE_DIRECTIVE_NOTE = "数据不足：该表述包含直接交易指令，已移除，需改为研究跟踪条件。"
+TRADE_DIRECTIVE_PREFIXES = ("建议", "可以", "可", "应", "应当", "应该", "考虑", "适合", "立即", "直接", "现在", "操作", "策略", "信号", "时机")
+TRADE_DIRECTIVE_SUFFIXES = ("信号", "机会", "时点", "建议", "策略", "操作", "仓位")
 
 
 def _data_gap(message: str) -> str:
@@ -962,8 +965,10 @@ def _validate_report(payload: dict[str, Any]) -> dict[str, Any]:
     except ValidationError as exc:
         raise HTTPException(status_code=422, detail="AI output schema validation failed") from exc
     report_dict = report.model_dump(mode="json")
+    _sanitize_trade_instructions(report_dict)
     report_dict["contradiction_matrix"] = build_contradiction_matrix(report_dict)
     report_dict["tracking_dashboard"] = build_tracking_dashboard(report_dict)
+    _sanitize_trade_instructions(report_dict)
     if _contains_trade_instruction(report_dict):
         raise HTTPException(status_code=422, detail="AI output contains direct trade instruction")
     return report_dict
@@ -1504,7 +1509,41 @@ def _strip_json_fence(content: str) -> str:
     return text.strip()
 
 
-def _contains_trade_instruction(value: Any) -> bool:
-    text = json.dumps(value, ensure_ascii=False)
-    return any(word in text for word in TRADE_ACTION_WORDS)
+def _is_direct_trade_instruction_text(text: str) -> bool:
+    compact = re.sub(r"\s+", "", text)
+    if not compact:
+        return False
+    for word in TRADE_ACTION_WORDS:
+        if word not in compact:
+            continue
+        if compact == word:
+            return True
+        if re.search(rf"({'|'.join(map(re.escape, TRADE_DIRECTIVE_PREFIXES))})[^。；;，,、]{{0,8}}{re.escape(word)}", compact):
+            return True
+        if re.search(rf"{re.escape(word)}[^。；;，,、]{{0,6}}({'|'.join(map(re.escape, TRADE_DIRECTIVE_SUFFIXES))})", compact):
+            return True
+    return False
 
+
+def _sanitize_trade_instructions(value: Any) -> Any:
+    if isinstance(value, str):
+        return TRADE_DIRECTIVE_NOTE if _is_direct_trade_instruction_text(value) else value
+    if isinstance(value, list):
+        for index, item in enumerate(value):
+            value[index] = _sanitize_trade_instructions(item)
+        return value
+    if isinstance(value, dict):
+        for key, item in list(value.items()):
+            value[key] = _sanitize_trade_instructions(item)
+        return value
+    return value
+
+
+def _contains_trade_instruction(value: Any) -> bool:
+    if isinstance(value, str):
+        return _is_direct_trade_instruction_text(value)
+    if isinstance(value, list):
+        return any(_contains_trade_instruction(item) for item in value)
+    if isinstance(value, dict):
+        return any(_contains_trade_instruction(item) for item in value.values())
+    return False

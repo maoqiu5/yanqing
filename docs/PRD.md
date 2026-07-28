@@ -21,6 +21,7 @@ Yanqing is an independent equity research workspace. A user supplies a stock nam
 - Show digest topics, financial facts, and follow-up questions in the frontend before the raw source-document list.
 - Show a `contradiction_matrix` so researchers can compare claims, supporting evidence, opposing evidence, data gaps, and tracking triggers in one place.
 - Show a `tracking_dashboard` so researchers can track next checks, current evidence, invalidation conditions, and data gaps.
+- Sanitize direct trade instructions at report-validation time and downgrade those fields to `data insufficient` research language, while preserving factual disclosures that are evidence rather than user trading commands.
 - Use CNINFO as the primary public source, with SSE and SZSE represented as future adapter boundaries.
 - Provide evidence source status, refresh, list, and detail capabilities and show source evidence in the frontend.
 

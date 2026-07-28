@@ -298,6 +298,39 @@ class AutoResearchEvidenceValidationTests(unittest.TestCase):
         self.assertTrue(_contains_trade_instruction({"core_view": "建议增持"}))
         self.assertTrue(_contains_trade_instruction({"core_view": "建议减持"}))
 
+    def test_validate_report_sanitizes_direct_trade_instruction_without_rejecting_factual_disclosure(self):
+        from backend.app.main import _validate_report
+
+        report = {
+            "title": "\u6df1\u7814\u62a5\u544a",
+            "data_quality": "limited",
+            "core_view": "\u5efa\u8bae\u4e70\u5165\uff0c\u7b49\u5f85\u653f\u7b56\u50ac\u5316",
+            "business_basics": ["\u516c\u53f8\u62ab\u9732\u80a1\u4e1c\u51cf\u6301\u516c\u544a\uff0c\u9700\u8ddf\u8e2a\u80a1\u6743\u7ed3\u6784\u53d8\u5316"],
+            "investment_contradiction": {
+                "summary": "\u53ef\u4ee5\u52a0\u4ed3\uff0c\u6536\u5165\u4fee\u590d\u5f39\u6027\u5927",
+                "positive": ["\u5efa\u8bae\u589e\u6301"],
+                "negative": ["\u56de\u8d2d\u589e\u6301\u8ba1\u5212\u5c1a\u9700\u6838\u5b9e"],
+                "key_question": "\u662f\u5426\u5e94\u51cf\u6301\uff1f",
+            },
+            "financial_diagnosis": ["\u7ecf\u8425\u73b0\u91d1\u6d41\u9700\u7ee7\u7eed\u8ddf\u8e2a"],
+            "policy_order_chain": ["\u8ba2\u5355\u6570\u636e\u4e0d\u8db3"],
+            "risks_and_disconfirming_evidence": ["\u6536\u5165\u6062\u590d\u4e0d\u53ca\u9884\u671f"],
+            "research_questions": ["\u662f\u5426\u53ef\u4ee5\u4e70\u5165\uff1f"],
+            "tracking_triggers": ["\u5356\u51fa\u4fe1\u53f7\u51fa\u73b0"],
+            "evidence": [],
+        }
+
+        validated = _validate_report(report)
+        text = json.dumps(validated, ensure_ascii=False)
+
+        self.assertNotIn("\u5efa\u8bae\u4e70\u5165", text)
+        self.assertNotIn("\u53ef\u4ee5\u52a0\u4ed3", text)
+        self.assertNotIn("\u5efa\u8bae\u589e\u6301", text)
+        self.assertNotIn("\u662f\u5426\u5e94\u51cf\u6301", text)
+        self.assertIn("\u6570\u636e\u4e0d\u8db3", validated["core_view"])
+        self.assertIn("\u80a1\u4e1c\u51cf\u6301\u516c\u544a", validated["business_basics"][0])
+        self.assertIn("\u56de\u8d2d\u589e\u6301\u8ba1\u5212", validated["investment_contradiction"]["negative"][0])
+
     def test_snapshot_evidence_sanitizes_fabricated_cninfo_quote_without_library_items(self):
         from backend.app.main import _validate_snapshot_evidence
 

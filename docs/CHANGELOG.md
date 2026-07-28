@@ -1,5 +1,12 @@
 # Yanqing CHANGELOG
 
+## 2026-07-28 v2.0.1
+
+- Fixed the AI report guardrail so direct trade instructions are sanitized at field level instead of returning a whole-report 422.
+- Preserved factual disclosures such as shareholder reduction announcements or repurchase/increase plans when they are research evidence rather than user trading instructions.
+- Impact: backend report validation and auto/manual research output safety.
+- Verification: VPS container backend unit tests.
+
 ## 2026-07-28 v2.0
 
 - Added the planned `tracking_dashboard` report layer for trigger/status/evidence/next-check/invalidation tracking.
