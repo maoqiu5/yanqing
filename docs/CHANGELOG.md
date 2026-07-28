@@ -1,5 +1,13 @@
 # Yanqing CHANGELOG
 
+## 2026-07-28 v2.2.3
+
+- Added an evidence-library summary layer for CNINFO announcements, including download/extraction counts, snippet counts, latest announcement date, category/source breakdowns, and aggregated gaps.
+- Added per-announcement `source_label`, `snippet_count`, and `text_length` fields to make the raw announcement chain easier to scan and reuse.
+- Upgraded the frontend to show announcement evidence summary before the raw announcement cards.
+- Impact: announcement evidence ingestion, evidence-library display, and research report readability.
+- Verification: local Python/JavaScript syntax checks and VPS container backend unit tests.
+
 ## 2026-07-28 v2.2.2
 
 - Fixed the research form inputs to disable browser autocomplete/history suggestions and use Yanqing-specific field names.

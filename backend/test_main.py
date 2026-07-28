@@ -1,4 +1,4 @@
-import json
+﻿import json
 import os
 import tempfile
 import unittest
@@ -207,11 +207,50 @@ class EvidenceStorageTests(unittest.TestCase):
         original_evidence_dir = main.EVIDENCE_DIR
         try:
             main.EVIDENCE_DIR = main.DATA_DIR / "empty-evidence-test"
-            self.assertEqual(main.build_evidence_library("000001.SZ", refresh=False), {
-                "status": "insufficient",
-                "items": [],
-                "data_gaps": ["公告原文数据不足"],
-            })
+            library = main.build_evidence_library("000001.SZ", refresh=False)
+            self.assertEqual(library["status"], "insufficient")
+            self.assertEqual(library["items"], [])
+            self.assertEqual(library["data_gaps"], ["公告原文数据不足"])
+            self.assertEqual(library["summary"]["total_items"], 0)
+            self.assertEqual(library["summary"]["snippet_count"], 0)
+        finally:
+            main.EVIDENCE_DIR = original_evidence_dir
+
+    def test_build_evidence_library_adds_source_summary_for_announcement_chain(self):
+        from backend.app import main
+
+        original_evidence_dir = main.EVIDENCE_DIR
+        try:
+            main.EVIDENCE_DIR = main.DATA_DIR / "evidence-summary-test"
+            main.save_evidence_index("300767.SZ", [{
+                "evidence_id": "sum-1",
+                "ticker": "300767.SZ",
+                "source": "cninfo",
+                "title": "2026年半年度报告",
+                "announcement_date": "2026-07-01",
+                "category": "semiannual_report",
+                "download_status": "downloaded",
+                "text_extract_status": "ready",
+                "local_pdf_path": "/tmp/sum-1.pdf",
+                "local_text_path": "/tmp/sum-1.txt",
+                "text_length": 14,
+                "snippets": [
+                    {"quote": "营业收入同比增长"},
+                    {"quote": "经营现金流改善"},
+                ],
+                "data_gaps": ["公告原文页码缺失"],
+            }])
+
+            library = main.build_evidence_library("300767.SZ", refresh=False)
+
+            self.assertEqual(library["summary"]["total_items"], 1)
+            self.assertEqual(library["summary"]["downloaded_count"], 1)
+            self.assertEqual(library["summary"]["extracted_count"], 1)
+            self.assertEqual(library["summary"]["snippet_count"], 2)
+            self.assertEqual(library["summary"]["latest_announcement_date"], "2026-07-01")
+            self.assertIn("公告原文页码缺失", library["summary"]["data_gaps"])
+            self.assertEqual(library["items"][0]["snippet_count"], 2)
+            self.assertEqual(library["items"][0]["text_length"], 14)
         finally:
             main.EVIDENCE_DIR = original_evidence_dir
 
@@ -500,6 +539,15 @@ class FrontendWorkspaceControlsTests(unittest.TestCase):
         self.assertIn("财报字段追溯", html)
         self.assertIn("function judgementView", html)
         self.assertIn("当前研判", html)
+
+    def test_frontend_shows_evidence_library_summary_before_raw_announcements(self):
+        html = (Path(__file__).resolve().parents[1] / "frontend" / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn("公告原文摘要", html)
+        self.assertIn("已下载", html)
+        self.assertIn("已抽取", html)
+        self.assertIn("摘录", html)
+        self.assertIn("原文公告", html)
 
 
     def test_research_form_disables_browser_autocomplete_history(self):

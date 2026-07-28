@@ -99,6 +99,7 @@ class EvidenceRecord(BaseModel):
     evidence_id: str
     ticker: str
     source: str = "cninfo"
+    source_label: str = "CNINFO 公告原文"
     title: str
     announcement_date: str = ""
     category: str = "other"
@@ -107,6 +108,8 @@ class EvidenceRecord(BaseModel):
     local_text_path: str = ""
     download_status: str = "skipped"
     text_extract_status: str = "skipped"
+    snippet_count: int = 0
+    text_length: int = 0
     snippets: list[EvidenceSnippet] = Field(default_factory=list)
     data_gaps: list[str] = Field(default_factory=list)
 
@@ -115,6 +118,7 @@ class EvidenceLibrary(BaseModel):
     status: str
     items: list[dict[str, Any]] = Field(default_factory=list)
     data_gaps: list[str] = Field(default_factory=list)
+    summary: dict[str, Any] = Field(default_factory=dict)
 
 
 class ResearchReport(BaseModel):
@@ -485,6 +489,7 @@ def parse_cninfo_announcements(payload: dict[str, Any], ticker: str) -> list[dic
                 announcement_date=announcement_date,
                 category=classify_announcement(title),
                 url=url,
+                source_label="CNINFO 公告原文",
             ).model_dump(mode="json")
         )
     return rows
@@ -650,6 +655,82 @@ def build_evidence_snippets(text: str, title: str, limit: int = 3) -> list[dict[
     return snippets
 
 
+def summarize_evidence_library(items: list[dict[str, Any]]) -> dict[str, Any]:
+    summary_items = [item for item in items if isinstance(item, dict)]
+    snippet_count = 0
+    downloaded_count = 0
+    extracted_count = 0
+    text_length = 0
+    latest_announcement_date = ""
+    category_counts: dict[str, int] = {}
+    source_counts: dict[str, int] = {}
+    data_gaps: list[str] = []
+
+    for item in summary_items:
+        snippets = item.get("snippets") if isinstance(item.get("snippets"), list) else []
+        snippet_count += len([snippet for snippet in snippets if isinstance(snippet, dict)])
+        if item.get("download_status") == "downloaded":
+            downloaded_count += 1
+        if item.get("text_extract_status") == "ready":
+            extracted_count += 1
+        text_length += _evidence_item_text_length(item)
+
+        announcement_date = str(item.get("announcement_date") or "")
+        if announcement_date and announcement_date > latest_announcement_date:
+            latest_announcement_date = announcement_date
+
+        category = str(item.get("category") or "other")
+        category_counts[category] = category_counts.get(category, 0) + 1
+        source_label = str(item.get("source_label") or item.get("source") or "cninfo")
+        source_counts[source_label] = source_counts.get(source_label, 0) + 1
+
+        for gap in item.get("data_gaps") or []:
+            gap_text = str(gap).strip()
+            if gap_text and gap_text not in data_gaps:
+                data_gaps.append(gap_text)
+
+    return {
+        "total_items": len(summary_items),
+        "downloaded_count": downloaded_count,
+        "extracted_count": extracted_count,
+        "snippet_count": snippet_count,
+        "text_length": text_length,
+        "latest_announcement_date": latest_announcement_date,
+        "category_counts": category_counts,
+        "source_counts": source_counts,
+        "data_gaps": data_gaps,
+    }
+
+
+def _evidence_item_text_length(item: dict[str, Any]) -> int:
+    text_length = item.get("text_length")
+    if isinstance(text_length, int) and text_length >= 0:
+        return text_length
+    try:
+        path = Path(str(item.get("local_text_path") or ""))
+        if path.is_file():
+            return len(path.read_text(encoding="utf-8"))
+    except Exception:
+        pass
+    snippets = item.get("snippets")
+    if isinstance(snippets, list):
+        return sum(len(str(snippet.get("quote") or "")) for snippet in snippets if isinstance(snippet, dict))
+    return 0
+
+
+def _normalize_evidence_record(item: dict[str, Any]) -> dict[str, Any]:
+    normalized = dict(item)
+    normalized["source_label"] = str(normalized.get("source_label") or normalized.get("source") or "CNINFO 公告原文")
+    snippets = normalized.get("snippets")
+    if isinstance(snippets, list):
+        normalized["snippet_count"] = sum(1 for snippet in snippets if isinstance(snippet, dict))
+    elif not isinstance(normalized.get("snippet_count"), int):
+        normalized["snippet_count"] = 0
+    if not isinstance(normalized.get("text_length"), int):
+        normalized["text_length"] = _evidence_item_text_length(normalized)
+    return normalized
+
+
 def evidence_id_for(meta: dict[str, Any]) -> str:
     payload = json.dumps(meta, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -746,6 +827,8 @@ def refresh_evidence_for_ticker(ticker: str, request: EvidenceRefreshRequest) ->
                     text_path.write_text(text, encoding="utf-8")
                     current["local_text_path"] = str(text_path)
                     current["snippets"] = build_evidence_snippets(text, str(current.get("title") or ""))
+                    current["snippet_count"] = len(current.get("snippets") or [])
+                    current["text_length"] = len(text)
                     current["text_extract_status"] = "ready"
                 else:
                     current["text_extract_status"] = "failed"
@@ -785,12 +868,13 @@ def build_evidence_library(ticker: str, refresh: bool = True, limit: int = 20, d
             refresh_gaps.extend(str(gap) for gap in refresh_result.get("data_gaps") or [])
         except Exception:
             refresh_gaps.append(_data_gap("公告原文刷新失败"))
-    items = sort_evidence_records(load_evidence_index(ticker))
+    items = [_normalize_evidence_record(item) for item in sort_evidence_records(load_evidence_index(ticker))]
     refresh_gaps = list(dict.fromkeys(_data_gap(str(gap)) for gap in refresh_gaps if str(gap).strip()))
     library = EvidenceLibrary(
         status="ready" if items and not refresh_gaps else ("limited" if items else "insufficient"),
         items=items[:limit],
         data_gaps=refresh_gaps if items else list(dict.fromkeys(refresh_gaps + [_data_gap("公告原文数据不足")])),
+        summary=summarize_evidence_library(items[:limit]),
     )
     return library.model_dump(mode="json")
 
