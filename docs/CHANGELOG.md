@@ -1,5 +1,11 @@
 # Yanqing CHANGELOG
 
+## 2026-07-28 v2.2.2
+
+- Fixed the research form inputs to disable browser autocomplete/history suggestions and use Yanqing-specific field names.
+- Impact: frontend research form only; no backend business logic, data boundary, SSO, gateway, or AI configuration changes.
+- Verification: frontend static regression test, local Python/JavaScript syntax checks, VPS container backend unit tests, and health checks.
+
 ## 2026-07-28 v2.2.1
 
 - Improved financial readability by replacing raw machine field names in digest observations with Chinese labels.

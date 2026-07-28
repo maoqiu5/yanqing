@@ -502,6 +502,18 @@ class FrontendWorkspaceControlsTests(unittest.TestCase):
         self.assertIn("当前研判", html)
 
 
+    def test_research_form_disables_browser_autocomplete_history(self):
+        html = (Path(__file__).resolve().parents[1] / "frontend" / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn('id="autoForm" autocomplete="off"', html)
+        self.assertIn('id="query" name="yanqing-stock-query" autocomplete="off"', html)
+        self.assertIn('id="ticker" name="yanqing-stock-code" autocomplete="off"', html)
+        self.assertIn('id="question" name="yanqing-research-question" autocomplete="off"', html)
+        self.assertIn('id="supplemental" name="yanqing-supplemental-material" autocomplete="off"', html)
+        self.assertIn('autocapitalize="off"', html)
+        self.assertIn('spellcheck="false"', html)
+
+
 class EvidenceApiTests(unittest.TestCase):
     def test_evidence_status_endpoint(self):
         response = client.get("/api/evidence/300767.SZ/sources/status")

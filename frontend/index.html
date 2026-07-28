@@ -15,11 +15,11 @@
   <main>
     <section class="panel" id="sidebar">
       <div class="notice" id="notice"></div>
-      <form class="form" id="autoForm">
-        <label>股票名称 / 代码<input id="query" required placeholder="例如：震安科技、震安、300767"></label>
-        <div class="row"><label>研究深度<select id="depth"><option value="full">V1.1+V1.2 全量深研</option><option value="basics">基本盘画像</option><option value="financials">财务体检</option></select></label><label>指定代码（可选）<input id="ticker" placeholder="例如：300767.SZ"></label></div>
-        <label>补充问题（可选）<textarea id="question" placeholder="例如：收入下降但现金流改善，该怎么理解？减值是否出清？"></textarea></label>
-        <label>补充材料（可选）<textarea id="supplemental" placeholder="可粘贴你额外掌握的公告、纪要、渠道信息；主流程不依赖手动输入。"></textarea></label>
+      <form class="form" id="autoForm" autocomplete="off">
+        <label>股票名称 / 代码<input id="query" name="yanqing-stock-query" autocomplete="off" autocapitalize="off" spellcheck="false" required placeholder="例如：震安科技、震安、300767"></label>
+        <div class="row"><label>研究深度<select id="depth"><option value="full">V1.1+V1.2 全量深研</option><option value="basics">基本盘画像</option><option value="financials">财务体检</option></select></label><label>指定代码（可选）<input id="ticker" name="yanqing-stock-code" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="例如：300767.SZ"></label></div>
+        <label>补充问题（可选）<textarea id="question" name="yanqing-research-question" autocomplete="off" spellcheck="false" placeholder="例如：收入下降但现金流改善，该怎么理解？减值是否出清？"></textarea></label>
+        <label>补充材料（可选）<textarea id="supplemental" name="yanqing-supplemental-material" autocomplete="off" spellcheck="false" placeholder="可粘贴你额外掌握的公告、纪要、渠道信息；主流程不依赖手动输入。"></textarea></label>
         <div class="actions"><button class="secondary" type="button" id="searchBtn">搜索股票</button><button class="secondary" type="button" id="historyBtn">历史报告</button><button type="submit" id="submitBtn">自动采集并深研</button></div>
       </form>
       <section style="margin-top:14px"><h2>搜索结果</h2><div class="results" id="results"><span class="snapshot">输入名称或代码后搜索。</span></div></section>
