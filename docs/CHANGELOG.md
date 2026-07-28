@@ -1,5 +1,13 @@
 # Yanqing CHANGELOG
 
+## 2026-07-28 v2.1
+
+- Added a collapsible left research-control panel so long reports can use more horizontal space.
+- Added a browser print-based `导出 PDF` button that prints only the research report body for archiving.
+- Added a frontend static regression test for the sidebar and PDF export controls.
+- Impact: frontend workspace usability, print/PDF output, and project documentation.
+- Verification: local Python syntax check, VPS container frontend-control regression test, VPS container backend unit tests, health check, SSO redirect checks, and browser workflow review.
+
 ## 2026-07-28 v2.0.1
 
 - Fixed the AI report guardrail so direct trade instructions are sanitized at field level instead of returning a whole-report 422.

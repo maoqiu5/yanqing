@@ -423,6 +423,19 @@ class EvidenceSnippetTests(unittest.TestCase):
         self.assertTrue(any("重大合同" in item["quote"] for item in snippets))
 
 
+class FrontendWorkspaceControlsTests(unittest.TestCase):
+    def test_frontend_has_collapsible_sidebar_and_pdf_export_controls(self):
+        html = (Path(__file__).resolve().parents[1] / "frontend" / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn('id="sidebarToggle"', html)
+        self.assertIn('id="exportBtn"', html)
+        self.assertIn("function toggleSidebar()", html)
+        self.assertIn("function exportPdf()", html)
+        self.assertIn("sidebar-collapsed", html)
+        self.assertIn("@media print", html)
+        self.assertIn("window.print()", html)
+
+
 class EvidenceApiTests(unittest.TestCase):
     def test_evidence_status_endpoint(self):
         response = client.get("/api/evidence/300767.SZ/sources/status")
