@@ -24,6 +24,7 @@ Yanqing is an independent equity research workspace. A user supplies a stock nam
 - Sanitize direct trade instructions at report-validation time and downgrade those fields to `data insufficient` research language, while preserving factual disclosures that are evidence rather than user trading commands.
 - Provide a collapsible research-control panel and browser PDF export for long-report reading, archiving, and offline review.
 - Show `financial_traceability` cards for key financial fields so researchers can verify period, value, source, interpretation, risk, and explicit data gaps.
+- Show `research_judgement` near the top of the report with a bolder conditional conclusion, confidence, scenarios, strengthen conditions, and weaken conditions.
 - Use CNINFO as the primary public source, with SSE and SZSE represented as future adapter boundaries.
 - Provide evidence source status, refresh, list, and detail capabilities and show source evidence in the frontend.
 

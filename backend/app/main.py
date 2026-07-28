@@ -121,6 +121,7 @@ class ResearchReport(BaseModel):
     title: str
     data_quality: str
     core_view: str
+    research_judgement: dict[str, Any] = Field(default_factory=dict)
     business_basics: list[str] = Field(default_factory=list)
     investment_contradiction: dict[str, Any]
     financial_diagnosis: list[str] = Field(default_factory=list)
@@ -892,6 +893,33 @@ def build_financial_digest_facts(snapshot: dict[str, Any]) -> list[dict[str, str
     return facts
 
 
+FINANCIAL_SOURCE_LABELS = {"income": "利润表", "balance": "资产负债表", "cashflow": "现金流量表", "indicators": "财务指标", "valuation": "行情估值"}
+FINANCIAL_FIELD_LABELS = {
+    "revenue": "营业收入",
+    "total_revenue": "营业总收入",
+    "n_income": "净利润",
+    "n_income_attr_p": "归母净利润",
+    "n_cashflow_act": "经营现金流净额",
+    "ocfps": "每股经营现金流",
+    "accounts_receiv": "应收账款",
+    "contract_assets": "合同资产",
+    "inventories": "存货",
+    "debt_to_assets": "资产负债率",
+    "grossprofit_margin": "毛利率",
+    "netprofit_margin": "净利率",
+    "roe": "ROE",
+    "roic": "ROIC",
+    "pe_ttm": "PE TTM",
+    "pb": "PB",
+    "total_mv": "总市值",
+    "circ_mv": "流通市值",
+    "or_yoy": "营业收入同比",
+    "netprofit_yoy": "净利润同比",
+    "q_sales_yoy": "单季收入同比",
+    "q_profit_yoy": "单季利润同比",
+}
+
+
 FINANCIAL_TRACE_FIELDS = (
     ("revenue", "营业收入", "income", "revenue", "收入修复是判断基本盘是否改善的第一层证据。", "收入需要继续与利润、回款和订单证据交叉验证。"),
     ("net_profit", "归母净利润", "income", "n_income_attr_p", "利润能否修复决定收入增长是否有质量。", "若收入恢复但利润仍弱，需追踪毛利率、费用率和减值。"),
@@ -926,6 +954,7 @@ def _financial_trace_item(snapshot: dict[str, Any], field: tuple[str, str, str, 
         "value": value if has_value else "数据不足",
         "unit": "%" if field_key in {"gross_margin", "net_margin", "roe", "roic"} else "元",
         "source": f"tushare.{group}.{source_field}",
+        "source_label": f"TuShare {FINANCIAL_SOURCE_LABELS.get(group, group)} / {label}",
         "data_status": "ready" if has_value else "insufficient",
         "interpretation": interpretation if has_value else f"{label}数据不足：当前快照未提供可追溯字段值。",
         "risk": risk,
@@ -948,7 +977,7 @@ def compact_kv(payload: dict[str, Any], keys: tuple[str, ...]) -> str:
     for key in keys:
         value = payload.get(key)
         if value not in (None, ""):
-            parts.append(f"{key}: {value}")
+            parts.append(f"{FINANCIAL_FIELD_LABELS.get(key, key)}: {value}")
     return "；".join(parts)
 
 
@@ -1020,6 +1049,7 @@ def _validate_report(payload: dict[str, Any]) -> dict[str, Any]:
     _sanitize_trade_instructions(report_dict)
     report_dict["contradiction_matrix"] = build_contradiction_matrix(report_dict)
     report_dict["tracking_dashboard"] = build_tracking_dashboard(report_dict)
+    report_dict["research_judgement"] = build_research_judgement(report_dict)
     _sanitize_trade_instructions(report_dict)
     if _contains_trade_instruction(report_dict):
         raise HTTPException(status_code=422, detail="AI output contains direct trade instruction")
@@ -1158,6 +1188,66 @@ def build_tracking_dashboard(report: dict[str, Any]) -> list[dict[str, Any]]:
         "next_check": "下一期财报、公告或订单披露继续核实",
         "invalidate_if": "后续仍无可追溯数据支撑当前研究命题",
     }]
+
+
+def build_research_judgement(report: dict[str, Any]) -> dict[str, Any]:
+    existing = report.get("research_judgement") if isinstance(report.get("research_judgement"), dict) else {}
+    core = str(existing.get("conclusion") or report.get("core_view") or "数据不足：缺少核心研判").strip()
+    if core and not core.startswith("当前研判"):
+        core = f"当前研判：{core}"
+
+    matrix = report.get("contradiction_matrix") if isinstance(report.get("contradiction_matrix"), list) else []
+    first_claim = str((matrix[0] or {}).get("claim") if matrix else report.get("core_view") or "核心矛盾").strip()
+    dashboard = report.get("tracking_dashboard") if isinstance(report.get("tracking_dashboard"), list) else []
+    triggers = _clean_text_items(report.get("tracking_triggers"), limit=5)
+    strengthen = _clean_text_items(existing.get("strengthen_conditions"), limit=5)
+    weaken = _clean_text_items(existing.get("weaken_conditions"), limit=5)
+
+    if not strengthen:
+        strengthen = [f"{trigger}，则当前修复逻辑增强" for trigger in triggers[:3]]
+    if not strengthen and dashboard:
+        strengthen = [str(item.get("next_check") or "").strip() for item in dashboard[:3] if isinstance(item, dict) and item.get("next_check")]
+    if not strengthen:
+        strengthen = ["数据不足：缺少可增强当前研判的明确条件"]
+
+    if not weaken:
+        weaken = [str(item.get("invalidate_if") or "").strip() for item in dashboard[:3] if isinstance(item, dict) and item.get("invalidate_if")]
+    if not weaken:
+        weaken = _clean_text_items(report.get("risks_and_disconfirming_evidence"), limit=3)
+    if not weaken:
+        weaken = ["数据不足：缺少可推翻当前研判的明确反证"]
+
+    data_quality = str(report.get("data_quality") or "limited")
+    if isinstance(existing.get("confidence"), dict) and existing["confidence"].get("level"):
+        confidence = existing["confidence"]
+    else:
+        level = "高" if data_quality == "ready" and len(dashboard) >= 4 else ("中" if data_quality in {"ready", "limited"} else "低")
+        confidence = {
+            "level": level,
+            "reason": "基于当前财务字段、证据链、反证和触发器形成的基本面研判；缺失来源仍以数据不足处理。",
+        }
+
+    base_case = existing.get("base_case") if isinstance(existing.get("base_case"), dict) else {}
+    upside_case = existing.get("upside_case") if isinstance(existing.get("upside_case"), dict) else {}
+    downside_case = existing.get("downside_case") if isinstance(existing.get("downside_case"), dict) else {}
+    return {
+        "conclusion": core,
+        "confidence": confidence,
+        "base_case": {
+            "title": str(base_case.get("title") or "最可能情景"),
+            "description": str(base_case.get("description") or f"{first_claim}仍是主线，当前证据支持形成有条件研判，而非停留在泛泛跟踪。"),
+        },
+        "upside_case": {
+            "title": str(upside_case.get("title") or "增强情景"),
+            "description": str(upside_case.get("description") or "若增强条件连续兑现，说明基本面修复质量提高。"),
+        },
+        "downside_case": {
+            "title": str(downside_case.get("title") or "削弱情景"),
+            "description": str(downside_case.get("description") or "若削弱条件出现，当前研判需要下修或推翻。"),
+        },
+        "strengthen_conditions": strengthen,
+        "weaken_conditions": weaken,
+    }
 
 
 SOURCE_BACKED_EVIDENCE_TERMS = ("cninfo", "公告", "原文", "evidence_library", "订单", "政策", "客户", "财报", "年报", "季报")
@@ -1358,7 +1448,16 @@ def _schema_hint() -> dict[str, Any]:
     return {
         "title": "研究标题",
         "data_quality": "ready | limited | insufficient",
-        "core_view": "核心研究判断，不得包含买入/卖出/加仓/减仓等交易指令",
+        "core_view": "明确核心研究判断：要敢于判断基本面强弱、修复阶段和第一矛盾；不得包含买入/卖出/加仓/减仓等交易指令",
+        "research_judgement": {
+            "conclusion": "当前研判：用一句话给出有条件的基本面判断，不说交易动作",
+            "confidence": {"level": "高 | 中 | 低", "reason": "置信度原因，说明证据强弱和数据缺口"},
+            "base_case": {"title": "最可能情景", "description": "当前最可能的基本面路径"},
+            "upside_case": {"title": "增强情景", "description": "哪些证据兑现会增强研判"},
+            "downside_case": {"title": "削弱情景", "description": "哪些反证出现会削弱或推翻研判"},
+            "strengthen_conditions": ["增强当前研判的条件"],
+            "weaken_conditions": ["削弱当前研判的条件"],
+        },
         "business_basics": ["公司靠什么赚钱、收入结构、客户/上下游、壁垒、约束；没有证据写数据不足"],
         "investment_contradiction": {"summary": "核心矛盾", "positive": ["正面证据"], "negative": ["反面证据"], "key_question": "最该验证的问题"},
         "financial_diagnosis": ["营收vs利润、净利润vs经营现金流、应收/合同资产vs收入、毛利率/净利率、减值线索、费用率、存货、ROE/ROIC"],
@@ -1387,14 +1486,14 @@ def _schema_hint() -> dict[str, Any]:
 
 def _manual_messages(request: ResearchRequest) -> list[dict[str, str]]:
     return [
-        {"role": "system", "content": "你是A股资深调研员助手。只基于用户输入材料做研究框架、证据链和风险反证，不提供直接交易指令。缺失信息必须写数据不足，不得编造。只返回严格JSON。"},
+        {"role": "system", "content": "你是A股资深调研员助手。只基于用户输入材料做研究框架、证据链和风险反证，不提供直接交易指令。缺失信息必须写数据不足，不得编造。你要敢于给出有条件的基本面研判、置信度、增强条件和削弱条件，不能只写继续跟踪。只返回严格JSON。"},
         {"role": "user", "content": json.dumps({"required_schema": _schema_hint(), "input": request.model_dump(mode="json")}, ensure_ascii=False)},
     ]
 
 
 def _snapshot_messages(request: AutoResearchRequest, snapshot: dict[str, Any]) -> list[dict[str, str]]:
     return [
-        {"role": "system", "content": "你是A股资深研究员。你要像调研员一样先看基本盘，再找核心矛盾，再追证据链。只能依据系统采集的数据快照和用户补充材料；公告、订单、政策、客户、财务原文只能引用 evidence_library.items 中存在的公告、订单、政策、客户、财务原文文字片段；缺少原文或抽取失败必须写数据不足；不得编造公告、订单、政策或交易结论；不得给买入卖出加仓减仓指令；只返回严格JSON。"},
+        {"role": "system", "content": "你是A股资深研究员。你要像调研员一样先看基本盘，再找核心矛盾，再追证据链。只能依据系统采集的数据快照和用户补充材料；公告、订单、政策、客户、财务原文只能引用 evidence_library.items 中存在的公告、订单、政策、客户、财务原文文字片段；缺少原文或抽取失败必须写数据不足；不得编造公告、订单、政策或交易结论；不得给买入卖出加仓减仓指令。你必须给出有条件的基本面研判、置信度、最可能情景、增强条件和削弱条件，不能只写继续跟踪；允许判断强弱和修复阶段，不允许给交易动作。只返回严格JSON。"},
         {"role": "user", "content": json.dumps({"task": "生成V1.1+V1.2深研驾驶舱报告", "depth": request.depth, "required_schema": _schema_hint(), "snapshot": snapshot}, ensure_ascii=False)},
     ]
 

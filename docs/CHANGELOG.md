@@ -1,5 +1,14 @@
 # Yanqing CHANGELOG
 
+## 2026-07-28 v2.2.1
+
+- Improved financial readability by replacing raw machine field names in digest observations with Chinese labels.
+- Added `source_label` for financial traceability cards so the UI can show human-readable source names while retaining raw field provenance in data.
+- Added `research_judgement` with conclusion, confidence, base/upside/downside cases, and strengthen/weaken conditions.
+- Strengthened AI prompts to require bolder conditional fundamental judgement without allowing direct trading instructions.
+- Impact: backend report validation, AI schema/prompt, frontend report rendering, and project documentation.
+- Verification: local Python/JavaScript syntax checks and VPS container backend unit tests.
+
 ## 2026-07-28 v2.2
 
 - Added `financial_traceability` to auto-research snapshots for field-level financial source tracking.

@@ -104,6 +104,11 @@ class SnapshotEvidenceTests(unittest.TestCase):
         self.assertTrue(any(item["topic"] == "receivables" for item in digest["items"]))
         self.assertTrue(any(item["topic"] == "cashflow" for item in digest["items"]))
         self.assertTrue(any(fact["topic"] == "cashflow" for fact in digest["financial_facts"]))
+        facts_text = json.dumps(digest["financial_facts"], ensure_ascii=False)
+        self.assertIn("\u7ecf\u8425\u73b0\u91d1\u6d41\u51c0\u989d", facts_text)
+        self.assertIn("\u5e94\u6536\u8d26\u6b3e", facts_text)
+        self.assertNotIn("n_cashflow_act", facts_text)
+        self.assertNotIn("accounts_receiv", facts_text)
         self.assertTrue(any("\u8ba2\u5355\u6570\u636e\u4e0d\u8db3" in question for question in digest["open_questions"]))
 
     def test_snapshot_includes_evidence_digest(self):
@@ -152,6 +157,7 @@ class SnapshotEvidenceTests(unittest.TestCase):
         self.assertEqual(by_key["revenue"]["period"], "20260331")
         self.assertEqual(by_key["revenue"]["value"], 52428658.97)
         self.assertEqual(by_key["revenue"]["source"], "tushare.income.revenue")
+        self.assertEqual(by_key["revenue"]["source_label"], "TuShare 利润表 / 营业收入")
         self.assertIn("\u6536\u5165", by_key["revenue"]["interpretation"])
         self.assertEqual(by_key["operating_cash_flow"]["source"], "tushare.cashflow.n_cashflow_act")
         self.assertEqual(by_key["contract_assets"]["value"], 9511394.21)
@@ -273,6 +279,38 @@ class AutoResearchEvidenceValidationTests(unittest.TestCase):
         self.assertTrue(any("grossprofit_margin" in item for item in dashboard[0]["evidence"]))
         self.assertIn("\u4e0b\u4e00\u671f", dashboard[0]["next_check"])
         self.assertIn("\u672a\u51fa\u73b0", dashboard[0]["invalidate_if"])
+
+    def test_validate_report_adds_bolder_research_judgement(self):
+        from backend.app.main import _validate_report
+
+        validated = _validate_report({
+            "title": "\u9707\u5b89\u79d1\u6280\u6df1\u7814",
+            "data_quality": "limited",
+            "core_view": "\u6536\u5165\u4fee\u590d\u5c1a\u672a\u5145\u5206\u8f6c\u5316\u4e3a\u5229\u6da6\u548c\u73b0\u91d1\u6d41\uff0c\u56de\u6b3e\u662f\u7b2c\u4e00\u77db\u76fe\u3002",
+            "business_basics": ["\u51cf\u9694\u9707\u884c\u4e1a\uff0c\u6570\u636e\u4ecd\u9700\u539f\u6587\u8865\u5f3a\u3002"],
+            "investment_contradiction": {
+                "summary": "\u6536\u5165\u4fee\u590d\u80fd\u5426\u7a7f\u900f\u5230\u5229\u6da6\u548c\u73b0\u91d1\u6d41",
+                "positive": ["\u7ecf\u8425\u73b0\u91d1\u6d41\u4e3a\u6b63"],
+                "negative": ["\u5e94\u6536\u8d26\u6b3e\u4ecd\u9ad8"],
+                "key_question": "\u56de\u6b3e\u662f\u5426\u6301\u7eed\u6539\u5584",
+            },
+            "financial_diagnosis": ["\u7ecf\u8425\u73b0\u91d1\u6d41\u4e0e\u51c0\u5229\u6da6\u80cc\u79bb"],
+            "policy_order_chain": ["\u8ba2\u5355\u6570\u636e\u4e0d\u8db3"],
+            "risks_and_disconfirming_evidence": ["\u5e94\u6536\u548c\u51cf\u503c\u98ce\u9669"],
+            "research_questions": ["\u51cf\u503c\u662f\u5426\u51fa\u6e05"],
+            "tracking_triggers": ["\u7ecf\u8425\u73b0\u91d1\u6d41\u6301\u7eed\u4e3a\u6b63", "\u5e94\u6536\u8d26\u6b3e\u4e0b\u964d"],
+            "evidence": [],
+        })
+
+        judgement = validated["research_judgement"]
+        self.assertIn("\u5f53\u524d\u7814\u5224", judgement["conclusion"])
+        self.assertEqual(judgement["confidence"]["level"], "\u4e2d")
+        self.assertIn("\u6700\u53ef\u80fd\u60c5\u666f", judgement["base_case"]["title"])
+        self.assertTrue(judgement["strengthen_conditions"])
+        self.assertTrue(judgement["weaken_conditions"])
+        text = json.dumps(judgement, ensure_ascii=False)
+        self.assertNotIn("\u4e70\u5165", text)
+        self.assertNotIn("\u5356\u51fa", text)
 
     def test_build_contradiction_matrix_falls_back_from_report_sections(self):
         from backend.app.main import build_contradiction_matrix
@@ -460,6 +498,8 @@ class FrontendWorkspaceControlsTests(unittest.TestCase):
         self.assertIn("window.print()", html)
         self.assertIn("function financialTrace", html)
         self.assertIn("财报字段追溯", html)
+        self.assertIn("function judgementView", html)
+        self.assertIn("当前研判", html)
 
 
 class EvidenceApiTests(unittest.TestCase):
