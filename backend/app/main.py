@@ -70,6 +70,15 @@ class ContradictionMatrixRow(BaseModel):
     tracking_triggers: list[str] = Field(default_factory=list)
 
 
+class TrackingDashboardItem(BaseModel):
+    trigger: str = "数据不足"
+    status: str = "watch"
+    why: str = "数据不足"
+    evidence: list[str] = Field(default_factory=list)
+    next_check: str = "数据不足"
+    invalidate_if: str = "数据不足"
+
+
 class EvidenceRefreshRequest(BaseModel):
     limit: int = Field(default=20, ge=1, le=50)
     days: int = Field(default=720, ge=1, le=3650)
@@ -119,6 +128,7 @@ class ResearchReport(BaseModel):
     evidence: list[EvidenceItem] = Field(default_factory=list)
     evidence_display: EvidenceDisplay = Field(default_factory=EvidenceDisplay)
     contradiction_matrix: list[ContradictionMatrixRow] = Field(default_factory=list)
+    tracking_dashboard: list[TrackingDashboardItem] = Field(default_factory=list)
 
 
 class PortalAiConfig(BaseModel):
@@ -953,6 +963,7 @@ def _validate_report(payload: dict[str, Any]) -> dict[str, Any]:
         raise HTTPException(status_code=422, detail="AI output schema validation failed") from exc
     report_dict = report.model_dump(mode="json")
     report_dict["contradiction_matrix"] = build_contradiction_matrix(report_dict)
+    report_dict["tracking_dashboard"] = build_tracking_dashboard(report_dict)
     if _contains_trade_instruction(report_dict):
         raise HTTPException(status_code=422, detail="AI output contains direct trade instruction")
     return report_dict
@@ -1011,6 +1022,84 @@ def build_contradiction_matrix(report: dict[str, Any]) -> list[dict[str, Any]]:
         "opposing_evidence": opposing or ["数据不足：缺少反向证据"],
         "data_gaps": gaps,
         "tracking_triggers": triggers,
+    }]
+
+
+def build_tracking_dashboard(report: dict[str, Any]) -> list[dict[str, Any]]:
+    existing = report.get("tracking_dashboard")
+    if isinstance(existing, list) and existing:
+        rows: list[dict[str, Any]] = []
+        for row in existing[:8]:
+            if not isinstance(row, dict):
+                continue
+            trigger = str(row.get("trigger") or "").strip()
+            if not trigger:
+                continue
+            status = str(row.get("status") or "watch").strip()
+            if status not in {"watch", "data_insufficient", "confirmed", "invalidated"}:
+                status = "watch"
+            rows.append({
+                "trigger": trigger,
+                "status": status,
+                "why": str(row.get("why") or "数据不足").strip() or "数据不足",
+                "evidence": _clean_text_items(row.get("evidence"), limit=4) or ["数据不足：缺少当前证据"],
+                "next_check": str(row.get("next_check") or "下一期财报、公告或订单披露继续核实").strip(),
+                "invalidate_if": str(row.get("invalidate_if") or "触发器未出现或反向证据增强").strip(),
+            })
+        if rows:
+            return rows
+
+    matrix = report.get("contradiction_matrix") if isinstance(report.get("contradiction_matrix"), list) else []
+    triggers: list[str] = []
+    by_trigger: dict[str, dict[str, Any]] = {}
+    for row in matrix:
+        if not isinstance(row, dict):
+            continue
+        for trigger in _clean_text_items(row.get("tracking_triggers"), limit=5):
+            if trigger not in triggers:
+                triggers.append(trigger)
+                by_trigger[trigger] = row
+    for trigger in _clean_text_items(report.get("tracking_triggers"), limit=8):
+        if trigger not in triggers:
+            triggers.append(trigger)
+
+    evidence_display = report.get("evidence_display") if isinstance(report.get("evidence_display"), dict) else {}
+    display_items = evidence_display.get("items") if isinstance(evidence_display.get("items"), list) else []
+    display_evidence = []
+    for item in display_items[:4]:
+        if isinstance(item, dict):
+            quote = str(item.get("quote") or "").strip()
+            note = str(item.get("note") or "").strip()
+            if quote:
+                display_evidence.append(f"{quote}；{note}" if note else quote)
+
+    dashboard: list[dict[str, Any]] = []
+    for trigger in triggers[:8]:
+        row = by_trigger.get(trigger) or {}
+        claim = str(row.get("claim") or report.get("core_view") or "核心矛盾").strip()
+        row_evidence = _clean_text_items(row.get("supporting_evidence"), limit=2)
+        row_evidence.extend(item for item in _clean_text_items(row.get("opposing_evidence"), limit=2) if item not in row_evidence)
+        evidence = list(row_evidence)
+        evidence.extend(item for item in display_evidence[:2] if item not in evidence)
+        status = "watch" if evidence else "data_insufficient"
+        dashboard.append({
+            "trigger": trigger,
+            "status": status,
+            "why": f"用于验证：{claim}",
+            "evidence": evidence or ["数据不足：缺少当前证据"],
+            "next_check": f"下一期财报、公告或订单披露继续核实：{trigger}",
+            "invalidate_if": f"{trigger}未出现，或相关反向证据继续增强",
+        })
+
+    if dashboard:
+        return dashboard
+    return [{
+        "trigger": "数据不足",
+        "status": "data_insufficient",
+        "why": "当前报告缺少可执行跟踪触发器",
+        "evidence": ["数据不足：缺少当前证据"],
+        "next_check": "下一期财报、公告或订单披露继续核实",
+        "invalidate_if": "后续仍无可追溯数据支撑当前研究命题",
     }]
 
 
@@ -1227,6 +1316,14 @@ def _schema_hint() -> dict[str, Any]:
             "opposing_evidence": ["反向证据、风险或反证"],
             "data_gaps": ["缺少的公告、订单、政策、客户、财报原文字段或仍需核实的问题"],
             "tracking_triggers": ["未来1-3个季度应观察的触发器"],
+        }],
+        "tracking_dashboard": [{
+            "trigger": "具体跟踪触发器",
+            "status": "watch | data_insufficient | confirmed | invalidated",
+            "why": "为什么该触发器能验证或推翻核心矛盾",
+            "evidence": ["当前已有证据或结构化事实；没有则写数据不足"],
+            "next_check": "下一步检查的财报、公告、订单、政策或字段",
+            "invalidate_if": "什么情况会推翻当前判断",
         }],
     }
 

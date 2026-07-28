@@ -1,5 +1,12 @@
 # Yanqing CHANGELOG
 
+## 2026-07-28 v2.0
+
+- Added the planned `tracking_dashboard` report layer for trigger/status/evidence/next-check/invalidation tracking.
+- Added documentation for the V2.0 tracking-trigger dashboard iteration.
+- Impact: report schema, AI prompt, frontend report rendering, and project documentation.
+- Verification: local syntax check, VPS container backend unit tests, internal payload fallback check, health check, SSO redirect checks, and browser UI verification.
+
 ## 2026-07-27 v1.7
 
 - Added the planned `contradiction_matrix` report layer for claim/support/opposition/gap/trigger comparison.

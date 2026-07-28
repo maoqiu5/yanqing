@@ -228,6 +228,28 @@ class EvidenceStorageTests(unittest.TestCase):
 
 
 class AutoResearchEvidenceValidationTests(unittest.TestCase):
+    def test_build_tracking_dashboard_uses_matrix_and_report_triggers(self):
+        from backend.app.main import build_tracking_dashboard
+
+        dashboard = build_tracking_dashboard({
+            "contradiction_matrix": [{
+                "claim": "\u6536\u5165\u4fee\u590d\u80fd\u5426\u8f6c\u5316\u4e3a\u5229\u6da6",
+                "supporting_evidence": ["2025\u5e74\u6536\u5165\u6062\u590d"],
+                "opposing_evidence": ["2026Q1\u6536\u5165\u4e0b\u6ed1"],
+                "data_gaps": ["\u8ba2\u5355\u6570\u636e\u4e0d\u8db3"],
+                "tracking_triggers": ["\u6bdb\u5229\u7387\u56de\u5347"],
+            }],
+            "tracking_triggers": ["\u6bdb\u5229\u7387\u56de\u5347", "\u5e94\u6536\u7ee7\u7eed\u4e0b\u964d"],
+            "evidence_display": {"items": [{"quote": "grossprofit_margin: 26.3693", "note": "\u6bdb\u5229\u7387\u7ebf\u7d22"}]},
+        })
+
+        self.assertEqual([item["trigger"] for item in dashboard], ["\u6bdb\u5229\u7387\u56de\u5347", "\u5e94\u6536\u7ee7\u7eed\u4e0b\u964d"])
+        self.assertEqual(dashboard[0]["status"], "watch")
+        self.assertIn("\u6536\u5165\u4fee\u590d", dashboard[0]["why"])
+        self.assertTrue(any("grossprofit_margin" in item for item in dashboard[0]["evidence"]))
+        self.assertIn("\u4e0b\u4e00\u671f", dashboard[0]["next_check"])
+        self.assertIn("\u672a\u51fa\u73b0", dashboard[0]["invalidate_if"])
+
     def test_build_contradiction_matrix_falls_back_from_report_sections(self):
         from backend.app.main import build_contradiction_matrix
 
