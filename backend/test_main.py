@@ -134,6 +134,30 @@ class SnapshotEvidenceTests(unittest.TestCase):
             main.collect_tushare = original_collect
             main.sina_quote = original_sina
 
+    def test_build_financial_traceability_maps_key_fields_to_sources(self):
+        from backend.app.main import build_financial_traceability
+
+        trace = build_financial_traceability({
+            "financials": {
+                "income": [{"end_date": "20260331", "revenue": 52428658.97, "n_income_attr_p": -1901201.47}],
+                "balance": [{"end_date": "20260331", "accounts_receiv": 425278061.39, "contract_assets": 9511394.21, "inventories": 86000000}],
+                "cashflow": [{"end_date": "20260331", "n_cashflow_act": 99798188.68}],
+                "indicators": [{"end_date": "20260331", "grossprofit_margin": 26.36, "netprofit_margin": -3.88, "roe": -0.42, "roic": 1.12}],
+            }
+        })
+
+        by_key = {item["field_key"]: item for item in trace["items"]}
+        self.assertEqual(trace["status"], "ready")
+        self.assertEqual(by_key["revenue"]["label"], "\u8425\u4e1a\u6536\u5165")
+        self.assertEqual(by_key["revenue"]["period"], "20260331")
+        self.assertEqual(by_key["revenue"]["value"], 52428658.97)
+        self.assertEqual(by_key["revenue"]["source"], "tushare.income.revenue")
+        self.assertIn("\u6536\u5165", by_key["revenue"]["interpretation"])
+        self.assertEqual(by_key["operating_cash_flow"]["source"], "tushare.cashflow.n_cashflow_act")
+        self.assertEqual(by_key["contract_assets"]["value"], 9511394.21)
+        self.assertEqual(by_key["impairment"]["data_status"], "insufficient")
+        self.assertIn("\u6570\u636e\u4e0d\u8db3", by_key["impairment"]["risk"])
+
 
 class EvidenceStorageTests(unittest.TestCase):
     def test_classifies_announcement_titles_conservatively(self):
@@ -434,6 +458,8 @@ class FrontendWorkspaceControlsTests(unittest.TestCase):
         self.assertIn("sidebar-collapsed", html)
         self.assertIn("@media print", html)
         self.assertIn("window.print()", html)
+        self.assertIn("function financialTrace", html)
+        self.assertIn("财报字段追溯", html)
 
 
 class EvidenceApiTests(unittest.TestCase):

@@ -1,5 +1,13 @@
 # Yanqing CHANGELOG
 
+## 2026-07-28 v2.2
+
+- Added `financial_traceability` to auto-research snapshots for field-level financial source tracking.
+- Added traceability cards for revenue, net profit, operating cash flow, receivables, contract assets, inventory, margins, ROE, ROIC, and impairment data gaps.
+- Added frontend display for `财报字段追溯` before evidence digest so researchers can verify field, period, value, source, interpretation, and risk.
+- Impact: backend snapshot payloads, frontend report rendering, and project documentation.
+- Verification: local Python/JavaScript syntax checks and VPS container backend unit tests.
+
 ## 2026-07-28 v2.1
 
 - Added a collapsible left research-control panel so long reports can use more horizontal space.

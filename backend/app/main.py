@@ -365,6 +365,7 @@ def build_company_snapshot(ts_code: str) -> dict[str, Any]:
             "tracking_triggers": ["新订单连续恢复", "经营现金流持续为正", "应收账款/合同资产下降", "毛利率修复", "减值减少", "政策进入地方预算"],
         },
     }
+    snapshot["financial_traceability"] = build_financial_traceability(snapshot)
     snapshot["evidence_digest"] = build_evidence_digest(snapshot)
     return snapshot
 
@@ -889,6 +890,57 @@ def build_financial_digest_facts(snapshot: dict[str, Any]) -> list[dict[str, str
     if profit_obs:
         facts.append({"topic": "profit", "label": "盈利质量", "period": latest_period, "observation": profit_obs})
     return facts
+
+
+FINANCIAL_TRACE_FIELDS = (
+    ("revenue", "营业收入", "income", "revenue", "收入修复是判断基本盘是否改善的第一层证据。", "收入需要继续与利润、回款和订单证据交叉验证。"),
+    ("net_profit", "归母净利润", "income", "n_income_attr_p", "利润能否修复决定收入增长是否有质量。", "若收入恢复但利润仍弱，需追踪毛利率、费用率和减值。"),
+    ("operating_cash_flow", "经营现金流净额", "cashflow", "n_cashflow_act", "经营现金流验证利润是否转化为真实回款。", "若现金流弱于利润，需重点核实应收、合同资产和回款节奏。"),
+    ("accounts_receiv", "应收账款", "balance", "accounts_receiv", "应收账款反映收入确认后的回款压力。", "应收相对收入偏高时，需关注坏账、客户质量和账龄结构。"),
+    ("contract_assets", "合同资产", "balance", "contract_assets", "合同资产用于观察项目确认、验收和回款链条。", "合同资产增长需要结合订单、验收和收款条款核实。"),
+    ("inventory", "存货", "balance", "inventories", "存货变化反映备货、项目交付和需求节奏。", "存货高企或周转变慢时，需关注跌价和需求兑现。"),
+    ("gross_margin", "毛利率", "indicators", "grossprofit_margin", "毛利率是收入质量和竞争格局变化的直观指标。", "毛利率修复若缺少订单结构支撑，仍需谨慎验证。"),
+    ("net_margin", "净利率", "indicators", "netprofit_margin", "净利率体现费用、减值和经营效率后的利润质量。", "净利率偏弱时，需要拆费用率和减值。"),
+    ("roe", "ROE", "indicators", "roe", "ROE衡量股东资本回报质量。", "ROE下行时，需判断是利润弱、资产周转慢还是杠杆变化。"),
+    ("roic", "ROIC", "indicators", "roic", "ROIC观察经营资产投入后的回报能力。", "ROIC不足时，需结合产能、项目周期和资本开支核实。"),
+    ("impairment", "减值损失", "income", "asset_impair_loss", "减值决定利润下滑是一次性出清还是结构性风险。", "数据不足：当前快照未采集该字段，需接入财报原文字段或补充 TuShare 减值字段。"),
+)
+
+
+def _first_financial_row(snapshot: dict[str, Any], group: str) -> dict[str, Any]:
+    financials = snapshot.get("financials") if isinstance(snapshot.get("financials"), dict) else {}
+    rows = financials.get(group) if isinstance(financials.get(group), list) else []
+    return first_or_empty(rows)
+
+
+def _financial_trace_item(snapshot: dict[str, Any], field: tuple[str, str, str, str, str, str]) -> dict[str, Any]:
+    field_key, label, group, source_field, interpretation, risk = field
+    row = _first_financial_row(snapshot, group)
+    value = row.get(source_field)
+    period = str(row.get("end_date") or row.get("ann_date") or "数据不足")
+    has_value = value not in (None, "")
+    return {
+        "field_key": field_key,
+        "label": label,
+        "period": period if has_value else "数据不足",
+        "value": value if has_value else "数据不足",
+        "unit": "%" if field_key in {"gross_margin", "net_margin", "roe", "roic"} else "元",
+        "source": f"tushare.{group}.{source_field}",
+        "data_status": "ready" if has_value else "insufficient",
+        "interpretation": interpretation if has_value else f"{label}数据不足：当前快照未提供可追溯字段值。",
+        "risk": risk,
+    }
+
+
+def build_financial_traceability(snapshot: dict[str, Any]) -> dict[str, Any]:
+    items = [_financial_trace_item(snapshot, field) for field in FINANCIAL_TRACE_FIELDS]
+    ready_count = sum(1 for item in items if item["data_status"] == "ready")
+    data_gaps = [f"{item['label']}数据不足" for item in items if item["data_status"] != "ready"]
+    return {
+        "status": "ready" if ready_count >= 4 else ("limited" if ready_count else "insufficient"),
+        "items": items,
+        "data_gaps": data_gaps,
+    }
 
 
 def compact_kv(payload: dict[str, Any], keys: tuple[str, ...]) -> str:
