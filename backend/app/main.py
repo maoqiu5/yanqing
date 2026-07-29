@@ -2,10 +2,13 @@
 
 import json
 import hashlib
+import subprocess
+import tempfile
 from datetime import timedelta
-from html import unescape
+from html import escape, unescape
 import os
 import re
+import shutil
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -15,7 +18,7 @@ from urllib.parse import urlparse
 import httpx
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel, Field, ValidationError
 
 ROOT_DIR = Path(__file__).resolve().parents[2]
@@ -25,7 +28,10 @@ RESEARCH_DIR = DATA_DIR / "research"
 SNAPSHOT_DIR = DATA_DIR / "snapshots"
 CACHE_DIR = DATA_DIR / "cache"
 EVIDENCE_DIR = DATA_DIR / "evidence"
+PDF_RUNTIME_DIR = DATA_DIR / "runtime" / "pdf"
 TUSHARE_API_URL = os.getenv("TUSHARE_API_URL", "http://api.tushare.pro")
+CHROMIUM_PATH = os.getenv("CHROMIUM_PATH", "").strip()
+PDF_RENDER_TIMEOUT_SECONDS = int(os.getenv("PDF_RENDER_TIMEOUT_SECONDS", "180"))
 TRADE_ACTION_WORDS = ("买入", "卖出", "加仓", "减仓", "增持", "减持", "清仓", "建仓", "满仓", "梭哈", "抄底", "止盈", "止损")
 TRADE_DIRECTIVE_NOTE = "数据不足：该表述包含直接交易指令，已移除，需改为研究跟踪条件。"
 TRADE_DIRECTIVE_PREFIXES = ("建议", "可以", "可", "应", "应当", "应该", "考虑", "适合", "立即", "直接", "现在", "操作", "策略", "信号", "时机")
@@ -292,12 +298,19 @@ def research_history(limit: int = 20) -> dict[str, Any]:
 
 @app.get("/api/research/{research_id}")
 def read_research(research_id: str) -> dict[str, Any]:
-    for path in RESEARCH_DIR.glob(f"*/{research_id}.json"):
-        try:
-            return json.loads(path.read_text(encoding="utf-8"))
-        except Exception as exc:
-            raise HTTPException(status_code=500, detail="failed to read research report") from exc
-    raise HTTPException(status_code=404, detail="research report not found")
+    return load_research_payload(research_id)
+
+
+@app.get("/api/research/{research_id}/pdf")
+def download_research_pdf(research_id: str) -> Response:
+    payload = load_research_payload(research_id)
+    pdf = render_research_pdf_bytes(payload)
+    filename = safe_pdf_filename(payload)
+    return Response(
+        content=pdf,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 def search_stocks(query: str, limit: int = 10) -> list[dict[str, Any]]:
@@ -1602,6 +1615,271 @@ def persist_report(stock_name: str, ticker: str, report: dict[str, Any], model: 
     path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
     payload["storage_path"] = str(path)
     return payload
+
+
+def load_research_payload(research_id: str) -> dict[str, Any]:
+    if not re.fullmatch(r"\d{14}-[a-f0-9]{8}", research_id):
+        raise HTTPException(status_code=404, detail="research report not found")
+    for path in RESEARCH_DIR.glob(f"*/{research_id}.json"):
+        try:
+            return json.loads(path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail="failed to read research report") from exc
+    raise HTTPException(status_code=404, detail="research report not found")
+
+
+def safe_pdf_filename(payload: dict[str, Any]) -> str:
+    ticker = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(payload.get("ticker") or "").strip()).strip("-")
+    research_id = re.sub(r"[^A-Za-z0-9_.-]+", "-", str(payload.get("id") or "report").strip()).strip("-")
+    parts = [part for part in ("yanqing", ticker, research_id) if part]
+    return "-".join(parts)[:150] + ".pdf"
+
+
+def render_research_pdf_bytes(payload: dict[str, Any]) -> bytes:
+    html = build_research_pdf_html(payload)
+    PDF_RUNTIME_DIR.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=PDF_RUNTIME_DIR) as temp_dir:
+        root = Path(temp_dir)
+        html_path = root / "report.html"
+        pdf_path = root / "report.pdf"
+        user_data_dir = root / "chromium-profile"
+        html_path.write_text(html, encoding="utf-8")
+        chromium = resolve_chromium_path()
+        command = [
+            chromium,
+            "--headless=new",
+            "--disable-gpu",
+            "--disable-dev-shm-usage",
+            "--no-sandbox",
+            "--no-first-run",
+            "--disable-background-networking",
+            "--disable-default-apps",
+            "--disable-sync",
+            "--metrics-recording-only",
+            "--force-color-profile=srgb",
+            "--run-all-compositor-stages-before-draw",
+            "--virtual-time-budget=10000",
+            f"--user-data-dir={user_data_dir}",
+            "--print-to-pdf-no-header",
+            f"--print-to-pdf={pdf_path}",
+            html_path.as_uri(),
+        ]
+        try:
+            subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=PDF_RENDER_TIMEOUT_SECONDS)
+        except FileNotFoundError as exc:
+            raise HTTPException(status_code=503, detail="PDF renderer is not available") from exc
+        except subprocess.TimeoutExpired as exc:
+            raise HTTPException(status_code=504, detail="PDF generation timed out") from exc
+        except subprocess.CalledProcessError as exc:
+            raise HTTPException(status_code=500, detail="PDF generation failed") from exc
+        if not pdf_path.is_file() or pdf_path.stat().st_size <= 0:
+            raise HTTPException(status_code=500, detail="PDF generation produced no file")
+        return pdf_path.read_bytes()
+
+
+def resolve_chromium_path() -> str:
+    candidates = [CHROMIUM_PATH] if CHROMIUM_PATH else []
+    candidates.extend((
+        shutil.which("chromium"),
+        shutil.which("chromium-browser"),
+        shutil.which("google-chrome"),
+        shutil.which("google-chrome-stable"),
+        "/usr/bin/chromium",
+        "/usr/bin/chromium-browser",
+        "/usr/bin/google-chrome",
+        "/usr/bin/google-chrome-stable",
+    ))
+    for candidate in candidates:
+        if candidate and Path(candidate).is_file():
+            return candidate
+    raise HTTPException(status_code=503, detail="PDF renderer is not available")
+
+
+def build_research_pdf_html(payload: dict[str, Any]) -> str:
+    report = payload.get("report") if isinstance(payload.get("report"), dict) else {}
+    snapshot = payload.get("input_snapshot") if isinstance(payload.get("input_snapshot"), dict) else {}
+    derived = snapshot.get("derived") if isinstance(snapshot.get("derived"), dict) else {}
+    digest = snapshot.get("evidence_digest") if isinstance(snapshot.get("evidence_digest"), dict) else {}
+    trace = snapshot.get("financial_traceability") if isinstance(snapshot.get("financial_traceability"), dict) else {}
+    library = snapshot.get("evidence_library") if isinstance(snapshot.get("evidence_library"), dict) else {}
+    evidence_display = report.get("evidence_display") if isinstance(report.get("evidence_display"), dict) else {}
+    evidence_items = evidence_display.get("items") if isinstance(evidence_display.get("items"), list) else []
+    tracking_dashboard = report.get("tracking_dashboard") if isinstance(report.get("tracking_dashboard"), list) else []
+    contradiction_matrix = report.get("contradiction_matrix") if isinstance(report.get("contradiction_matrix"), list) else []
+    judgement = report.get("research_judgement") if isinstance(report.get("research_judgement"), dict) else {}
+
+    body = [
+        '<main class="report">',
+        '<section class="cover">',
+        f"<p>研擎深研报告</p><h1>{_h(payload.get('stock_name') or payload.get('ticker') or '未命名标的')}</h1>",
+        f"<div>{_h(payload.get('ticker') or '-')} · {_h(str(payload.get('created_at') or '')[:19].replace('T', ' '))} · 模型 {_h(payload.get('model') or '-')}</div>",
+        "</section>",
+        _metrics([
+            ("数据质量", report.get("data_quality") or "数据不足", derived.get("latest_period") or "-"),
+            ("PE TTM", _dig(derived, "valuation", "pe_ttm") or "不足", f"PB {_dig(derived, 'valuation', 'pb') or '-'}"),
+            ("ROE", _dig(derived, "profitability", "roe") or "不足", f"毛利率 {_dig(derived, 'profitability', 'grossprofit_margin') or '-'}"),
+            ("证据状态", library.get("status") or "insufficient", f"公告 {len(library.get('items') or [])} 条"),
+        ]),
+        _section(report.get("title") or "核心观点", f"<p class=\"core\">{_h(report.get('core_view') or '数据不足')}</p>"),
+        _judgement_pdf(judgement, report),
+        _cards("基本研究框架", [
+            ("基本盘", _list_html(report.get("business_basics"))),
+            ("核心矛盾", f"<p>{_h(_dig(report, 'investment_contradiction', 'summary') or '数据不足')}</p>{_list_html([*_as_list(_dig(report, 'investment_contradiction', 'positive')), *_as_list(_dig(report, 'investment_contradiction', 'negative')), _dig(report, 'investment_contradiction', 'key_question')])}"),
+            ("财务体检", _list_html(report.get("financial_diagnosis"))),
+            ("政策订单链", _list_html(report.get("policy_order_chain"))),
+            ("风险与反证", _list_html(report.get("risks_and_disconfirming_evidence"))),
+            ("跟踪触发器", _list_html(report.get("tracking_triggers"))),
+        ]),
+        _matrix_pdf(contradiction_matrix),
+        _dashboard_pdf(tracking_dashboard),
+        _cards("系统识别的异常", [("异常线索", _list_html([f"{item.get('item')}：{item.get('observation')}；{item.get('implication')}" for item in derived.get("anomalies") or [] if isinstance(item, dict)]))]),
+        _financial_trace_pdf(trace),
+        _evidence_digest_pdf(digest),
+        _cards("调研问题", [("待核实", _list_html(report.get("research_questions")))]),
+        _cards("证据链", [(str(item.get("source") or "来源不足"), f"<p>{_h(item.get('quote') or '数据不足')}</p><span>{_h(item.get('note') or '')}</span>") for item in evidence_items] or [("数据不足", "<span>当前没有可直接展示的可追溯证据。</span>")]),
+        _evidence_library_pdf(library),
+        "</main>",
+    ]
+    return "<!doctype html><html lang=\"zh-CN\"><head><meta charset=\"utf-8\">" + _pdf_css() + "</head><body>" + "".join(body) + "</body></html>"
+
+
+def _h(value: Any) -> str:
+    return escape(str(value if value is not None else ""), quote=True)
+
+
+def _dig(payload: Any, *keys: str) -> Any:
+    current = payload
+    for key in keys:
+        if not isinstance(current, dict):
+            return None
+        current = current.get(key)
+    return current
+
+
+def _as_list(value: Any) -> list[Any]:
+    if isinstance(value, list):
+        return value
+    return [value] if value not in (None, "") else []
+
+
+def _list_html(items: Any) -> str:
+    values = [str(item).strip() for item in _as_list(items) if str(item or "").strip()]
+    if not values:
+        values = ["数据不足"]
+    return "<ul>" + "".join(f"<li>{_h(item)}</li>" for item in values) + "</ul>"
+
+
+def _section(title: str, inner_html: str) -> str:
+    return f'<section class="panel"><h2>{_h(title)}</h2>{inner_html}</section>'
+
+
+def _metrics(items: list[tuple[str, Any, Any]]) -> str:
+    return '<section class="metrics">' + "".join(f'<article class="metric"><span>{_h(label)}</span><strong>{_h(value)}</strong><small>{_h(note)}</small></article>' for label, value, note in items) + "</section>"
+
+
+def _cards(title: str, cards: list[tuple[str, str]]) -> str:
+    return _section(title, '<div class="grid">' + "".join(f'<article class="card"><strong>{_h(card_title)}</strong>{inner}</article>' for card_title, inner in cards) + "</div>")
+
+
+def _judgement_pdf(judgement: dict[str, Any], report: dict[str, Any]) -> str:
+    conclusion = judgement.get("conclusion") or f"当前研判：{report.get('core_view') or '数据不足'}"
+    confidence = judgement.get("confidence") if isinstance(judgement.get("confidence"), dict) else {}
+    cards = [
+        (_dig(judgement, "base_case", "title") or "最可能情景", f"<p>{_h(_dig(judgement, 'base_case', 'description') or '数据不足')}</p>"),
+        (_dig(judgement, "upside_case", "title") or "增强情景", f"<p>{_h(_dig(judgement, 'upside_case', 'description') or '数据不足')}</p><span>增强条件</span>{_list_html(judgement.get('strengthen_conditions'))}"),
+        (_dig(judgement, "downside_case", "title") or "削弱情景", f"<p>{_h(_dig(judgement, 'downside_case', 'description') or '数据不足')}</p><span>削弱条件</span>{_list_html(judgement.get('weaken_conditions'))}"),
+    ]
+    return _section("当前研判", f'<p class="core">{_h(conclusion)}</p><p class="snapshot">置信度：{_h(confidence.get("level") or "数据不足")} · {_h(confidence.get("reason") or "")}</p><div class="grid">' + "".join(f'<article class="card"><strong>{_h(title)}</strong>{inner}</article>' for title, inner in cards) + "</div>")
+
+
+def _matrix_pdf(rows: list[Any]) -> str:
+    cards = []
+    for row in rows[:6]:
+        if not isinstance(row, dict):
+            continue
+        cards.append((row.get("claim") or "数据不足", f"<span>支持证据</span>{_list_html(row.get('supporting_evidence'))}<span>反向证据</span>{_list_html(row.get('opposing_evidence'))}<span>数据缺口</span>{_list_html(row.get('data_gaps'))}<span>跟踪触发器</span>{_list_html(row.get('tracking_triggers'))}"))
+    return _cards("核心矛盾证据矩阵", cards or [("数据不足", _list_html([]))])
+
+
+def _dashboard_pdf(items: list[Any]) -> str:
+    status_text = {"watch": "观察中", "data_insufficient": "数据不足", "confirmed": "已验证", "invalidated": "已推翻"}
+    cards = []
+    for item in items[:8]:
+        if not isinstance(item, dict):
+            continue
+        cards.append((item.get("trigger") or "数据不足", f"<span>状态：{_h(status_text.get(str(item.get('status')), item.get('status') or '观察中'))}</span><p>{_h(item.get('why') or '数据不足')}</p><span>当前证据</span>{_list_html(item.get('evidence'))}<span>下一步检查</span><p>{_h(item.get('next_check') or '数据不足')}</p><span>推翻条件</span><p>{_h(item.get('invalidate_if') or '数据不足')}</p>"))
+    return _cards("跟踪触发器仪表盘", cards or [("数据不足", _list_html([]))])
+
+
+def _financial_trace_pdf(trace: dict[str, Any]) -> str:
+    items = trace.get("items") if isinstance(trace.get("items"), list) else []
+    cards = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        cards.append((item.get("label") or item.get("field_key") or "字段", f"<span>{_h(item.get('period') or '数据不足')} · {_h(item.get('source_label') or item.get('source') or '')}</span><p>{_h(item.get('value') or '数据不足')} {_h(item.get('unit') or '')}</p><span>解释</span><p>{_h(item.get('interpretation') or '数据不足')}</p><span>风险</span><p>{_h(item.get('risk') or '数据不足')}</p>"))
+    gap = "；".join(str(gap) for gap in trace.get("data_gaps") or []) or "无"
+    return _section("财报字段追溯", f'<p class="snapshot">状态：{_h(trace.get("status") or "insufficient")} · 数据缺口：{_h(gap)}</p><div class="grid">' + "".join(f'<article class="card"><strong>{_h(title)}</strong>{inner}</article>' for title, inner in (cards or [("数据不足", "<span>当前快照没有可追溯的财报字段。</span>")])) + "</div>")
+
+
+def _evidence_digest_pdf(digest: dict[str, Any]) -> str:
+    cards = []
+    for fact in digest.get("financial_facts") or []:
+        if isinstance(fact, dict):
+            cards.append((fact.get("label") or fact.get("topic") or "财务事实", f"<span>{_h(fact.get('period') or '-')}</span><p>{_h(fact.get('observation') or '数据不足')}</p>"))
+    for item in (digest.get("items") or [])[:8]:
+        if isinstance(item, dict):
+            cards.append((item.get("label") or item.get("topic") or "证据", f"<span>{_h(item.get('source') or '-')} · {_h(item.get('date') or '-')}</span><p>{_h(item.get('quote') or '数据不足')}</p>"))
+    gaps = "；".join(str(gap) for gap in digest.get("data_gaps") or []) or "无"
+    return _section("可用证据摘要", f'<p class="snapshot">状态：{_h(digest.get("status") or "insufficient")} · 数据缺口：{_h(gaps)}</p><div class="grid">' + "".join(f'<article class="card"><strong>{_h(title)}</strong>{inner}</article>' for title, inner in (cards or [("数据不足", "<span>当前没有可摘要的公告/财报证据。</span>")])) + f'</div><h2>待核实问题</h2>{_list_html(digest.get("open_questions"))}')
+
+
+def _evidence_library_pdf(library: dict[str, Any]) -> str:
+    summary = library.get("summary") if isinstance(library.get("summary"), dict) else {}
+    items = library.get("items") if isinstance(library.get("items"), list) else []
+    cards = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        snippets = "".join(f"<p>{_h(snippet.get('quote') if isinstance(snippet, dict) else snippet)}</p>" for snippet in item.get("snippets") or [])
+        gaps = f'<span class="warn">{"；".join(_h(gap) for gap in item.get("data_gaps") or [])}</span>' if item.get("data_gaps") else ""
+        cards.append((item.get("title") or "未命名文档", f"<span>日期：{_h(item.get('announcement_date') or '-')} · 分类：{_h(item.get('category') or 'other')}</span><span>来源：{_h(item.get('source_label') or item.get('source') or '-')} · 文本抽取：{_h(item.get('text_extract_status') or 'skipped')} · 摘录：{_h(item.get('snippet_count') or 0)} · 正文长度：{_h(item.get('text_length') or 0)}</span>{snippets or '<p class=\"snapshot\">暂无摘录</p>'}{gaps}"))
+    metrics = _metrics([
+        ("原文公告", summary.get("total_items") or 0, ""),
+        ("已下载", summary.get("downloaded_count") or 0, ""),
+        ("已抽取", summary.get("extracted_count") or 0, ""),
+        ("摘录", summary.get("snippet_count") or 0, ""),
+    ])
+    gaps = "；".join(str(gap) for gap in summary.get("data_gaps") or []) or "无"
+    return _section("公告原文摘要", metrics + f'<p class="snapshot">最近公告：{_h(summary.get("latest_announcement_date") or "数据不足")} · 正文总长度：{_h(summary.get("text_length") or 0)} · 缺口：{_h(gaps)}</p><div class="grid">' + "".join(f'<article class="card evidence-card"><strong>{_h(title)}</strong>{inner}</article>' for title, inner in (cards or [("暂无公告原文", "<span>当前快照没有可展示的源文件证据。</span>")])) + "</div>")
+
+
+def _pdf_css() -> str:
+    return """<style>
+@page{size:A4;margin:14mm 12mm 16mm}
+*{box-sizing:border-box}
+body{margin:0;background:#fff;color:#17212b;font-family:Arial,"Microsoft YaHei",sans-serif;font-size:12px;line-height:1.65}
+.report{width:100%}
+.cover{break-after:avoid;margin-bottom:12px;padding-bottom:10px;border-bottom:2px solid #195cff}
+.cover p{margin:0;color:#647284;font-size:12px}
+.cover h1{margin:2px 0 4px;font-size:26px;line-height:1.25}
+.cover div{color:#647284}
+h2{margin:0 0 8px;font-size:16px;line-height:1.35}
+p{margin:0 0 6px}
+ul{margin:0;padding-left:16px;color:#4e5f73}
+li{margin:0 0 3px}
+.panel{break-inside:avoid-page;margin:0 0 10px;padding:12px;border:1px solid #dbe4ef;border-radius:8px;background:#fff}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
+.metric,.card{break-inside:avoid-page;padding:10px;border:1px solid #dbe4ef;border-radius:8px;background:#f8fbff}
+.metric span,.card span,.snapshot{display:block;color:#647284;font-size:10.5px;line-height:1.55}
+.metric strong{display:block;font-size:17px;line-height:1.25;word-break:break-word}
+.card strong{display:block;margin-bottom:5px;color:#0f8f6f;font-size:13px}
+.core{padding:10px;border-left:4px solid #0f8f6f;border-radius:6px;background:#eaf8f3;line-height:1.8}
+.warn{color:#ad7414}
+.evidence-card{break-inside:auto}
+section:nth-of-type(4n+1){break-before:auto}
+</style>"""
 
 
 def _summary(payload: dict[str, Any]) -> dict[str, Any]:

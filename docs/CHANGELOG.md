@@ -1,5 +1,25 @@
 # Yanqing CHANGELOG
 
+## 2026-07-28 v2.2.6
+
+- Fixed Chromium discovery for server PDF export by using `shutil.which` plus common absolute binary paths instead of a runtime `--version` probe.
+- Impact: PDF export renderer detection only; no research logic, data-source boundary, SSO, or AI configuration changes.
+- Verification: local Python syntax check, VPS container rebuild, health check, Chromium path check, and non-secret portal-token presence check.
+
+## 2026-07-28 v2.2.5
+
+- Increased the server PDF render timeout and added Chromium launch flags to make long report exports more reliable.
+- Impact: PDF export only; no research logic, data-source boundary, SSO, or AI configuration changes.
+- Verification: local Python syntax check.
+
+## 2026-07-28 v2.2.4
+
+- Replaced browser print-based PDF export with a server-side `/api/research/{id}/pdf` download endpoint.
+- Added report-to-HTML PDF rendering with A4 pagination rules so major sections and cards avoid awkward page breaks.
+- Added Chromium and CJK fonts to the production image for consistent Chinese PDF output.
+- Impact: report archiving/export only; no research data-source, SSO, AI configuration, or cnstock boundary changes.
+- Verification: local Python syntax check and frontend JavaScript syntax check. Full business testing intentionally left for manual user testing.
+
 ## 2026-07-28 v2.2.3
 
 - Added an evidence-library summary layer for CNINFO announcements, including download/extraction counts, snippet counts, latest announcement date, category/source breakdowns, and aggregated gaps.

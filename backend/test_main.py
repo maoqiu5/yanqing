@@ -533,8 +533,10 @@ class FrontendWorkspaceControlsTests(unittest.TestCase):
         self.assertIn("function toggleSidebar()", html)
         self.assertIn("function exportPdf()", html)
         self.assertIn("sidebar-collapsed", html)
-        self.assertIn("@media print", html)
-        self.assertIn("window.print()", html)
+        self.assertNotIn("@media print", html)
+        self.assertNotIn("window.print()", html)
+        self.assertIn("/research/", html)
+        self.assertIn("/pdf", html)
         self.assertIn("function financialTrace", html)
         self.assertIn("财报字段追溯", html)
         self.assertIn("function judgementView", html)
@@ -570,6 +572,46 @@ class EvidenceApiTests(unittest.TestCase):
         payload = response.json()
         self.assertEqual(payload["ticker"], "300767.SZ")
         self.assertEqual(payload["sources"][0]["name"], "cninfo")
+
+
+class ResearchPdfTests(unittest.TestCase):
+    def test_research_pdf_endpoint_returns_pdf_attachment(self):
+        from backend.app import main
+
+        report = {
+            "id": "20260728123456-abcd1234",
+            "created_at": "2026-07-28T12:34:56+00:00",
+            "stock_name": "中国太保",
+            "ticker": "601601.SH",
+            "model": "gpt-5.5",
+            "report": {
+                "title": "中国太保深研报告",
+                "data_quality": "ready",
+                "core_view": "数据充分",
+                "research_judgement": {
+                    "conclusion": "当前研判：基本盘稳健。",
+                    "confidence": {"level": "中", "reason": "证据完整"},
+                    "base_case": {"title": "最可能情景", "description": "主线明确"},
+                    "upside_case": {"title": "增强情景", "description": "改善延续"},
+                    "downside_case": {"title": "削弱情景", "description": "反证增强"},
+                    "strengthen_conditions": ["条件A"],
+                    "weaken_conditions": ["条件B"],
+                },
+            },
+            "input_snapshot": {"derived": {"latest_period": "20240630"}},
+        }
+
+        with patch("backend.app.main.load_research_payload", return_value=report), patch(
+            "backend.app.main.render_research_pdf_bytes",
+            return_value=b"%PDF-1.4\n%mock\n",
+        ) as render_pdf:
+            response = client.get("/api/research/20260728123456-abcd1234/pdf")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "application/pdf")
+        self.assertIn("attachment;", response.headers["content-disposition"])
+        self.assertEqual(response.content, b"%PDF-1.4\n%mock\n")
+        render_pdf.assert_called_once()
         self.assertTrue(payload["sources"][0]["configured"])
         self.assertEqual(payload["sources"][0]["status"], "ready")
 

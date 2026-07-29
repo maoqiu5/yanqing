@@ -4,7 +4,7 @@
 
 **Goal:** Make the Yanqing research workspace easier to use during long reports by collapsing the left panel and exporting the visible report as PDF.
 
-**Architecture:** This is a frontend-only change in `frontend/index.html`. The report remains server-rendered data fetched through existing APIs; PDF export uses browser print/save-as-PDF with print-specific CSS. No backend, data, SSO, gateway, AI configuration, or runtime directory changes.
+**Architecture:** The collapsible left panel remains a frontend-only control in `frontend/index.html`. PDF export is now server-rendered: the frontend stores the current report id and downloads `GET /api/research/{id}/pdf`; the backend reloads the persisted report JSON, renders an A4 HTML report, and uses headless Chromium to produce a PDF. No SSO, gateway, AI configuration, external cnstock dependency, or research data-source boundary changes.
 
 **Tech Stack:** Plain HTML, CSS, JavaScript, existing FastAPI static frontend.
 
@@ -28,32 +28,36 @@
 - Produces: `toggleSidebar()` and `exportPdf()` browser functions.
 - Produces: `body.sidebar-collapsed` CSS state.
 
-- [ ] Add a compact toolbar in the header with `折叠左侧` and `导出 PDF` buttons.
-- [ ] Keep `导出 PDF` disabled until a real report is rendered.
-- [ ] Implement `toggleSidebar()` to collapse the left panel on desktop and hide form content on mobile.
-- [ ] Implement `exportPdf()` with `window.print()`.
+- [x] Add a compact toolbar in the header with `折叠左侧` and `导出 PDF` buttons.
+- [x] Keep `导出 PDF` disabled until a real report is rendered.
+- [x] Implement `toggleSidebar()` to collapse the left panel on desktop and hide form content on mobile.
+- [x] Implement `exportPdf()` as a download trigger for `/api/research/{id}/pdf`; do not call `window.print()`.
 
-### Task 2: Add Print Styles
+### Task 2: Add Server PDF Rendering
 
 **Files:**
-- Modify: `frontend/index.html`
+- Modify: `backend/app/main.py`
+- Modify: `Dockerfile`
 
 **Interfaces:**
-- Consumes: existing `#output` report DOM.
+- Produces: `GET /api/research/{research_id}/pdf`.
+- Consumes: persisted report JSON under `data/research`.
+- Uses: headless Chromium and `fonts-noto-cjk` inside the app container.
 
-- [ ] Add `@media print` CSS that hides header, sidebar, notices, buttons, search/history/source panels.
-- [ ] Force the report to full width and remove shadows/backgrounds for clean PDF output.
-- [ ] Prevent card content from splitting awkwardly with `break-inside: avoid`.
+- [x] Add a persisted-report loader shared by JSON read and PDF export.
+- [x] Render a standalone report HTML document using the same report sections and visual language as the browser report.
+- [x] Add A4 pagination CSS: section/card `break-inside: avoid-page`, readable margins, and natural long evidence-card pagination.
+- [x] Add Chromium and CJK fonts to the production image.
 
 ### Task 3: Verify And Deploy
 
 **Files:**
 - Modify: `docs/CHANGELOG.md`
 - Modify: `docs/PRD.md`
+- Modify: `docs/DEPLOYMENT.md`
 
-- [ ] Run local syntax/static checks.
-- [ ] Sync frontend and docs to `/root/apps/yanqing`.
-- [ ] Rebuild the VPS container.
-- [ ] Run VPS backend tests and health check.
-- [ ] Use the browser with an authenticated session to run one stock research flow and assess whether the cockpit meets senior A-share analyst needs.
+- [x] Run local syntax/static checks.
+- [ ] Sync code and docs to `/root/apps/yanqing`.
+- [ ] Rebuild the VPS container so Chromium is installed.
+- [ ] Run health check and manually download a PDF from a generated or historical report.
 - [ ] Commit locally and push to VPS bare remote `vps/main`.
