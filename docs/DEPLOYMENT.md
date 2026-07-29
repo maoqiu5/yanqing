@@ -19,6 +19,14 @@
 - Production compose file: `docker-compose.prod.yml`
 - Production service: `yanqing_app:8000`
 
+## Version Management
+
+- Primary local repository: `C:\Users\12514\Documents\研擎`
+- Primary VPS bare remote: `vps = ssh://root@192.236.235.229/root/git/yanqing.git`
+- GitHub backup remote: `github = git@github.com:maoqiu5/yanqing.git`
+- Local `main` should track `vps/main`; GitHub is a backup push target, not the deployment source of truth.
+- `git push` does not auto-deploy. Production files under `/root/apps/yanqing` are still released by the documented sync/rebuild process.
+
 ## AI Configuration
 
 - `PORTAL_AI_CONFIG_URL=http://portal_frontend:3000/internal/ai-config`

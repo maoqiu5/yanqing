@@ -1,5 +1,12 @@
 # Yanqing CHANGELOG
 
+## 2026-07-28 v2.2.7
+
+- Added GitHub as a backup remote for the Yanqing repository while keeping `vps/main` as the local main branch upstream.
+- Synchronized tracked source and documentation files between local project and `/root/apps/yanqing`, leaving VPS-only runtime data, env files, and Engramory untouched.
+- Impact: version management and documentation only; no runtime behavior, data-source boundary, SSO, or AI configuration changes.
+- Verification: tracked-file SHA-256 comparison between local and VPS production directory, VPS bare remote commit check, GitHub remote commit check, and sensitive/runtime path scan of the committed tree.
+
 ## 2026-07-28 v2.2.6
 
 - Fixed Chromium discovery for server PDF export by using `shutil.which` plus common absolute binary paths instead of a runtime `--version` probe.
