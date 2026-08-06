@@ -645,8 +645,8 @@ class ResearchPdfTests(unittest.TestCase):
         self.assertIn("attachment;", response.headers["content-disposition"])
         self.assertEqual(response.content, b"%PDF-1.4\n%mock\n")
         render_pdf.assert_called_once()
-        self.assertTrue(payload["sources"][0]["configured"])
-        self.assertEqual(payload["sources"][0]["status"], "ready")
+        self.assertTrue(report["sources"][0]["configured"])
+        self.assertEqual(report["sources"][0]["status"], "ready")
 
     def test_evidence_list_uses_cache_without_refresh(self):
         from backend.app import main
