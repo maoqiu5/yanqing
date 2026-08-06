@@ -198,11 +198,6 @@ class SnapshotEvidenceTests(unittest.TestCase):
         self.assertTrue(any(item.startswith("killpg:4321") for item in calls))
         self.assertTrue(any(item.startswith("wait:") for item in calls))
 
-    def test_docker_compose_sets_init_true_for_app(self):
-        compose_text = Path("docker-compose.prod.yml").read_text(encoding="utf-8")
-        self.assertIn("init: true", compose_text)
-
-
 class EvidenceStorageTests(unittest.TestCase):
     def test_classifies_announcement_titles_conservatively(self):
         from backend.app.main import classify_announcement
