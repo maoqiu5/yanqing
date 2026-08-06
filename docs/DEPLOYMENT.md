@@ -52,6 +52,8 @@
 - The frontend `导出 PDF` button downloads `GET /yanqing/api/research/{id}/pdf`; it does not call browser print.
 - The backend renders the saved report JSON into an A4 HTML document and uses headless Chromium in the application container.
 - The production image installs `chromium` and `fonts-noto-cjk`; set `CHROMIUM_PATH` only if the binary path differs.
+- The production Compose service uses `init: true` so Docker's init process reaps orphaned Chromium/crashpad descendants.
+- The backend starts Chromium in its own process session, waits for the renderer process, and terminates the process group on PDF timeout.
 - If PDF export fails, first check that the container image was rebuilt after the Dockerfile change and that `/root/apps/yanqing/data/runtime/pdf` is writable.
 
 ## Verification

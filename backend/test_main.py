@@ -3,6 +3,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException
@@ -163,6 +164,43 @@ class SnapshotEvidenceTests(unittest.TestCase):
         self.assertEqual(by_key["contract_assets"]["value"], 9511394.21)
         self.assertEqual(by_key["impairment"]["data_status"], "insufficient")
         self.assertIn("\u6570\u636e\u4e0d\u8db3", by_key["impairment"]["risk"])
+
+    def test_pdf_renderer_kills_process_group_and_reaps_on_timeout(self):
+        from backend.app import main
+
+        calls: list[str] = []
+
+        def fake_popen(*args, **kwargs):
+            self.assertTrue(kwargs["start_new_session"])
+            return SimpleNamespace(
+                pid=4321,
+                communicate=lambda timeout=None: (_ for _ in ()).throw(main.subprocess.TimeoutExpired(cmd=args[0], timeout=timeout)),
+                kill=lambda: calls.append("kill"),
+                wait=lambda timeout=None: calls.append(f"wait:{timeout}"),
+            )
+
+        with patch("backend.app.main.subprocess.Popen", side_effect=fake_popen), \
+             patch("backend.app.main.os.killpg", side_effect=lambda pgid, sig: calls.append(f"killpg:{pgid}:{sig}")), \
+             patch("backend.app.main.os.getpgid", return_value=4321), \
+             patch("backend.app.main.resolve_chromium_path", return_value="/usr/bin/chromium"):
+            with tempfile.TemporaryDirectory() as temp_dir:
+                html_path = Path(temp_dir) / "report.html"
+                pdf_path = Path(temp_dir) / "report.pdf"
+                html_path.write_text("<html></html>", encoding="utf-8")
+                with self.assertRaises(HTTPException) as exc:
+                    main._run_pdf_renderer(
+                        ["/usr/bin/chromium", "--print-to-pdf=/tmp/report.pdf", html_path.as_uri()],
+                        timeout_seconds=1,
+                        pdf_path=pdf_path,
+                    )
+
+        self.assertEqual(exc.exception.status_code, 504)
+        self.assertTrue(any(item.startswith("killpg:4321") for item in calls))
+        self.assertTrue(any(item.startswith("wait:") for item in calls))
+
+    def test_docker_compose_sets_init_true_for_app(self):
+        compose_text = Path("docker-compose.prod.yml").read_text(encoding="utf-8")
+        self.assertIn("init: true", compose_text)
 
 
 class EvidenceStorageTests(unittest.TestCase):

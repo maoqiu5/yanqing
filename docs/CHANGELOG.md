@@ -1,5 +1,12 @@
 # Yanqing CHANGELOG
 
+## 2026-08-06 v2.2.8
+
+- Fixed PDF export subprocess lifecycle management by running Chromium in a dedicated process session and cleaning the renderer process group on timeout.
+- Enabled Docker Compose `init: true` for the app service so orphaned Chromium/crashpad descendants are reaped by Docker init instead of accumulating under uvicorn PID 1.
+- Impact: PDF export runtime stability only; no research logic, data-source boundary, SSO, or AI configuration changes.
+- Verification: local subprocess lifecycle regression checks, production compose init check, VPS rebuild/recreate, health check, and post-export zombie-count observation.
+
 ## 2026-07-28 v2.2.7
 
 - Added GitHub as a backup remote for the Yanqing repository while keeping `vps/main` as the local main branch upstream.

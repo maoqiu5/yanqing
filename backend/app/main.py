@@ -2,6 +2,7 @@
 
 import json
 import hashlib
+import signal
 import subprocess
 import tempfile
 from datetime import timedelta
@@ -1655,6 +1656,8 @@ def render_research_pdf_bytes(payload: dict[str, Any]) -> bytes:
             "--disable-background-networking",
             "--disable-default-apps",
             "--disable-sync",
+            "--disable-crash-reporter",
+            "--disable-breakpad",
             "--metrics-recording-only",
             "--force-color-profile=srgb",
             "--run-all-compositor-stages-before-draw",
@@ -1664,17 +1667,45 @@ def render_research_pdf_bytes(payload: dict[str, Any]) -> bytes:
             f"--print-to-pdf={pdf_path}",
             html_path.as_uri(),
         ]
-        try:
-            subprocess.run(command, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=PDF_RENDER_TIMEOUT_SECONDS)
-        except FileNotFoundError as exc:
-            raise HTTPException(status_code=503, detail="PDF renderer is not available") from exc
-        except subprocess.TimeoutExpired as exc:
-            raise HTTPException(status_code=504, detail="PDF generation timed out") from exc
-        except subprocess.CalledProcessError as exc:
-            raise HTTPException(status_code=500, detail="PDF generation failed") from exc
+        _run_pdf_renderer(command, timeout_seconds=PDF_RENDER_TIMEOUT_SECONDS, pdf_path=pdf_path)
         if not pdf_path.is_file() or pdf_path.stat().st_size <= 0:
             raise HTTPException(status_code=500, detail="PDF generation produced no file")
         return pdf_path.read_bytes()
+
+
+def _run_pdf_renderer(command: list[str], *, timeout_seconds: int, pdf_path: Path) -> None:
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            start_new_session=True,
+        )
+    except FileNotFoundError as exc:
+        raise HTTPException(status_code=503, detail="PDF renderer is not available") from exc
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        _terminate_process_group(process, signal.SIGTERM)
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            _terminate_process_group(process, signal.SIGKILL)
+            process.wait(timeout=5)
+        raise HTTPException(status_code=504, detail="PDF generation timed out") from exc
+    if process.returncode != 0:
+        raise HTTPException(status_code=500, detail="PDF generation failed")
+    if not pdf_path.is_file() or pdf_path.stat().st_size <= 0:
+        raise HTTPException(status_code=500, detail="PDF generation produced no file")
+
+
+def _terminate_process_group(process: subprocess.Popen[bytes], sig: int) -> None:
+    try:
+        os.killpg(os.getpgid(process.pid), sig)
+    except ProcessLookupError:
+        return
+    except Exception:
+        process.kill()
 
 
 def resolve_chromium_path() -> str:
