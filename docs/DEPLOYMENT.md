@@ -56,10 +56,24 @@
 - The backend starts Chromium in its own process session, waits for the renderer process, and terminates the process group on PDF timeout.
 - If PDF export fails, first check that the container image was rebuilt after the Dockerfile change and that `/root/apps/yanqing/data/runtime/pdf` is writable.
 
+## 公告原文浏览与来源追溯
+
+- `GET /yanqing/api/evidence/{ticker}/{evidence_id}/pdf` 返回原始公告 PDF（`inline` 预览）。
+- `GET /yanqing/api/evidence/{ticker}/{evidence_id}/text?page=N` 返回指定页文本预览；不带 `page` 时返回全文预览。
+- `GET /yanqing/api/evidence/{ticker}/{evidence_id}/source` 返回结构化来源元数据、等级、页码和摘录信息。
+- 抽取文本时保存：
+  - `data/evidence/{ticker}/text/{evidence_id}.txt`
+  - `data/evidence/{ticker}/text/{evidence_id}.pages.json`
+- 文件接口只允许访问当前 ticker 证据目录内的 `documents/{evidence_id}.pdf` 和 `text/{evidence_id}.txt`，`evidence_id` 必须是 64 位十六进制。
+- 这些 API 仍由 BrianHub 网关 SSO 保护，不额外实现登录。
+
+
 ## Verification
 
 - `https://brianhub.net/yanqing/` returns 200 for an authenticated session.
 - `https://brianhub.net/yanqing/api/health` returns the Yanqing health response.
 - A generated or historical report downloads a PDF from `/yanqing/api/research/{id}/pdf`.
+- Evidence original PDF/text/source endpoints return 200 for authenticated sessions and are covered by gateway SSO.
+
 - An unauthenticated page or business API request follows the portal SSO check.
 - The portal documentation center renders `docs/README.md` and the standard `specs/` and `plans/` entries.

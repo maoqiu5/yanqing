@@ -1,5 +1,57 @@
 # Yanqing CHANGELOG
 
+
+## 2026-08-25 v2.3 Phase 1
+
+- Added evidence grading and confidence metadata for Yanqing evidence records and snippets:
+  - `EvidenceGrade` (A/B/C/D), `EvidenceRef`, `source_type`, `grade`, `confidence`, `file_name`, `retrieved_at`.
+  - `ContradictionMatrixRow.supporting_evidence_refs / opposing_evidence_refs`.
+  - `TrackingDashboardItem.evidence_refs`.
+  - `EvidenceLibrary.summary.grade_summary`.
+- Added conservative rule-based `grade_evidence_record` / `confidence_for_evidence`, with idempotent backfill for existing evidence indexes.
+- Enriched `evidence_digest` items with source type, grade, confidence, and page metadata.
+- Impact: evidence credibility and traceability groundwork only; no SSO, AI config, data-source boundary, or cnstock boundary changes.
+- Verification: isolated container run of `backend.test_main` with 53 tests passed.
+
+## 2026-08-25 v2.3 Phase 2
+
+- Added original announcement browsing and source traceability APIs:
+  - `GET /api/evidence/{ticker}/{evidence_id}/pdf`
+  - `GET /api/evidence/{ticker}/{evidence_id}/text`
+  - `GET /api/evidence/{ticker}/{evidence_id}/source`
+- Added page-preserving PDF text extraction (`extract_pdf_text_pages`) and page-aware evidence snippets.
+- Added `local_pages_path` to evidence records and `text/{evidence_id}.pages.json` storage.
+- Enhanced evidence detail/source responses with grade, source type, page count, and snippet page metadata.
+- Updated frontend with grade badges, original PDF/text buttons, and source links in evidence digest, evidence chain, contradiction matrix, and tracking dashboard.
+- Security: original file APIs validate evidence id and keep file access inside the ticker evidence directory.
+- Impact: evidence browsing and traceability only; no SSO, AI config, data-source boundary, or cnstock boundary changes.
+- Verification: isolated container run of `backend.test_main` with 61 tests passed.
+
+## 2026-08-25 v2.3 Phase 3
+
+- Added structured evidence references to tracking dashboard items.
+- Implemented `_validate_evidence_refs`: verifies `evidence_id` exists and quote matches snapshot evidence, drops invalid refs, and downgrades items without valid refs to `data_insufficient`.
+- Added fallback generation from evidence snippets by trigger keywords.
+- Added status mapping from evidence grade: A/B direct evidence -> `confirmed`, C/indirect -> `watch`, no valid ref -> `data_insufficient`.
+- Added `evidence_refs` to the AI schema hint so new reports can emit precise evidence references.
+- Frontend already renders `evidence_refs` as clickable source links in tracking dashboard cards.
+- Impact: tracking precision only; no SSO, AI config, data-source boundary, or cnstock boundary changes.
+- Verification: isolated container run of `backend.test_main` with 65 tests passed.
+
+## 2026-08-25 v2.3 Phase 4
+
+- Improved server-rendered PDF pagination and reading experience:
+  - Cover page now forces a page break.
+  - Major report sections (当前研判、矛盾矩阵、跟踪仪表盘、财报追溯、证据摘要、来源追溯、公告原文摘要) start on new pages.
+  - Panels/cards use `break-inside: avoid-page` / `page-break-inside: avoid` so cards do not split across pages.
+  - Added PDF footer/page number CSS via `@page` margin boxes (ignored if the renderer does not support them).
+- Added a "证据来源追溯" PDF section that aggregates `evidence_refs` from tracking dashboard, contradiction matrix, and evidence chain.
+- Impact: PDF export readability only; no SSO, AI config, data-source boundary, or cnstock boundary changes.
+- Verification: isolated container run of `backend.test_main` with 68 tests passed.
+
+
+
+
 ## 2026-08-06 v2.2.8
 
 - Fixed PDF export subprocess lifecycle management by running Chromium in a dedicated process session and cleaning the renderer process group on timeout.

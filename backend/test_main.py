@@ -1,4 +1,4 @@
-﻿import json
+import json
 import os
 import tempfile
 import unittest
@@ -597,6 +597,16 @@ class FrontendWorkspaceControlsTests(unittest.TestCase):
         self.assertIn('spellcheck="false"', html)
 
 
+class FrontendOriginalSourceTests(unittest.TestCase):
+    def test_frontend_has_evidence_original_buttons_and_grade_badges(self):
+        html = (Path(__file__).resolve().parents[1] / "frontend" / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn("grade-badge", html)
+        self.assertIn("原文 PDF", html)
+        self.assertIn("原文文本", html)
+        self.assertIn("function evidenceRefsHtml", html)
+        self.assertIn("evidenceLibraryView(library,ticker)", html)
+
 class EvidenceApiTests(unittest.TestCase):
     def test_evidence_status_endpoint(self):
         response = client.get("/api/evidence/300767.SZ/sources/status")
@@ -779,7 +789,7 @@ class ResearchPdfTests(unittest.TestCase):
                 with patch("backend.app.main.search_cninfo_announcements", return_value=[record]), patch(
                     "backend.app.main.download_cninfo_pdf",
                     return_value={**record, "download_status": "downloaded", "local_pdf_path": str(pdf_path)},
-                ), patch("backend.app.main.extract_pdf_text", return_value=("合同文本", "ready")):
+                ), patch("backend.app.main.extract_pdf_text_pages", return_value=(["合同文本"], "ready")):
                     response = client.post("/api/evidence/300767/refresh", json={"download": True})
 
                 self.assertEqual(response.status_code, 200)
@@ -816,7 +826,7 @@ class ResearchPdfTests(unittest.TestCase):
                 with patch("backend.app.main.search_cninfo_announcements", return_value=[record]), patch(
                     "backend.app.main.download_cninfo_pdf",
                     return_value={**record, "download_status": "downloaded", "local_pdf_path": str(pdf_path)},
-                ), patch("backend.app.main.extract_pdf_text", return_value=("合同文本", "ready")):
+                ), patch("backend.app.main.extract_pdf_text_pages", return_value=(["合同文本"], "ready")):
                     response = client.post("/api/evidence/300767/refresh", json={"download": True})
 
                 self.assertEqual(response.status_code, 200)
@@ -862,7 +872,7 @@ class ResearchPdfTests(unittest.TestCase):
                 with patch("backend.app.main.search_cninfo_announcements", return_value=[record]), patch(
                     "backend.app.main.download_cninfo_pdf",
                     return_value={**record, "download_status": "downloaded", "local_pdf_path": str(pdf_path)},
-                ), patch("backend.app.main.extract_pdf_text", return_value=("contract text", "ready")):
+                ), patch("backend.app.main.extract_pdf_text_pages", return_value=(["contract text"], "ready")):
                     response = client.post("/api/evidence/300767/refresh", json={"download": True})
 
                 self.assertEqual(response.status_code, 200)
@@ -1098,6 +1108,405 @@ class CninfoAdapterTests(unittest.TestCase):
         finally:
             main.httpx.Client = original_client
 
+
+class EvidenceGradingTests(unittest.TestCase):
+    def test_grade_evidence_record_regular_report(self):
+        from backend.app import main
+
+        item = {
+            "evidence_id": "a" * 64,
+            "url": "https://static.cninfo.com.cn/finalpage/2026-01-01.pdf",
+            "category": "annual_report",
+            "source_type": "official_financial_report",
+            "download_status": "downloaded",
+            "text_extract_status": "ready",
+        }
+        grade, confidence = main.grade_evidence_record(item)
+        self.assertEqual(grade, "A")
+        self.assertEqual(confidence, "high")
+
+    def test_grade_evidence_record_announcement_without_text(self):
+        from backend.app import main
+
+        item = {
+            "evidence_id": "b" * 64,
+            "url": "https://static.cninfo.com.cn/finalpage/2026-01-02.pdf",
+            "category": "contract",
+            "source_type": "official_announcement",
+            "download_status": "skipped",
+            "text_extract_status": "skipped",
+        }
+        grade, confidence = main.grade_evidence_record(item)
+        self.assertEqual(grade, "C")
+        self.assertEqual(confidence, "medium")
+
+    def test_grade_evidence_record_untraceable(self):
+        from backend.app import main
+
+        item = {
+            "evidence_id": "c" * 64,
+            "url": "",
+            "category": "other",
+        }
+        grade, confidence = main.grade_evidence_record(item)
+        self.assertEqual(grade, "D")
+        self.assertEqual(confidence, "low")
+
+    def test_normalize_evidence_record_backfills_grade_idempotently(self):
+        from backend.app import main
+
+        item = {
+            "evidence_id": "d" * 64,
+            "ticker": "300767.SZ",
+            "source_label": "CNINFO 公告原文",
+            "title": "2025年年度报告",
+            "announcement_date": "2026-04-30",
+            "category": "annual_report",
+            "url": "https://static.cninfo.com.cn/finalpage/2026.pdf",
+            "download_status": "downloaded",
+            "text_extract_status": "ready",
+            "snippets": [
+                {"quote": "营业收入增长", "note": "摘要", "page": 3},
+            ],
+        }
+        first = main._normalize_evidence_record(item)
+        self.assertEqual(first["source_type"], "official_financial_report")
+        self.assertEqual(first["grade"], "A")
+        self.assertEqual(first["confidence"], "high")
+        self.assertEqual(first["snippets"][0]["grade"], "A")
+        self.assertEqual(first["snippets"][0]["confidence"], "high")
+        self.assertEqual(first["snippets"][0]["page_label"], "第3页")
+
+        second = main._normalize_evidence_record(first)
+        self.assertEqual(second["grade"], "A")
+        self.assertEqual(second["confidence"], "high")
+        self.assertEqual(second["snippets"][0]["grade"], "A")
+        self.assertEqual(second["snippets"][0]["page_label"], "第3页")
+
+    def test_evidence_library_summary_includes_grade_summary(self):
+        from backend.app import main
+
+        items = [
+            {
+                "evidence_id": "e" * 64,
+                "url": "https://static.cninfo.com.cn/a.pdf",
+                "category": "annual_report",
+                "source_type": "official_financial_report",
+                "grade": "A",
+                "download_status": "downloaded",
+                "text_extract_status": "ready",
+                "announcement_date": "2026-04-30",
+                "snippets": [],
+            },
+            {
+                "evidence_id": "f" * 64,
+                "url": "https://static.cninfo.com.cn/b.pdf",
+                "category": "risk",
+                "source_type": "official_announcement",
+                "grade": "C",
+                "download_status": "downloaded",
+                "text_extract_status": "ready",
+                "announcement_date": "2026-05-01",
+                "snippets": [],
+            },
+        ]
+        summary = main.summarize_evidence_library(items)
+        self.assertEqual(summary["grade_summary"]["A"], 1)
+        self.assertEqual(summary["grade_summary"]["C"], 1)
+        self.assertEqual(summary["grade_summary"]["D"], 0)
+
+class EvidenceOriginalSourceTests(unittest.TestCase):
+    def test_build_evidence_snippets_sets_real_page_number(self):
+        from backend.app.main import build_evidence_snippets
+
+        pages = ["公司介绍。", "重大合同金额5亿元。经营现金流为正。"]
+        snippets = build_evidence_snippets("\n".join(pages), "重大合同公告", limit=2, pages=pages)
+
+        self.assertTrue(any(item["page"] == 2 for item in snippets))
+        self.assertTrue(any("重大合同" in item["quote"] for item in snippets))
+
+    def test_evidence_pdf_endpoint_returns_pdf(self):
+        from backend.app import main
+
+        original_evidence_dir = main.EVIDENCE_DIR
+        evidence_id = "a" * 64
+        with tempfile.TemporaryDirectory() as temp_dir:
+            main.EVIDENCE_DIR = Path(temp_dir) / "evidence"
+            try:
+                ticker_dir = main.evidence_ticker_dir("300767.SZ")
+                documents_dir = ticker_dir / "documents"
+                documents_dir.mkdir(parents=True, exist_ok=True)
+                pdf_path = documents_dir / f"{evidence_id}.pdf"
+                pdf_path.write_bytes(b"%PDF-1.4\nmock")
+                main.save_evidence_index("300767.SZ", [{
+                    "evidence_id": evidence_id,
+                    "ticker": "300767.SZ",
+                    "source_label": "CNINFO 公告原文",
+                    "title": "年度报告",
+                    "announcement_date": "2026-04-30",
+                    "category": "annual_report",
+                    "url": "https://static.cninfo.com.cn/a.pdf",
+                    "local_pdf_path": str(pdf_path),
+                    "download_status": "downloaded",
+                    "text_extract_status": "ready",
+                    "snippets": [],
+                }])
+
+                response = client.get(f"/api/evidence/300767.SZ/{evidence_id}/pdf")
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(response.headers["content-type"], "application/pdf")
+                self.assertEqual(response.content, b"%PDF-1.4\nmock")
+            finally:
+                main.EVIDENCE_DIR = original_evidence_dir
+
+    def test_evidence_pdf_rejects_invalid_evidence_id(self):
+        response = client.get("/api/evidence/300767.SZ/not-hex/pdf")
+        self.assertEqual(response.status_code, 400)
+
+    def test_evidence_pdf_rejects_path_traversal(self):
+        response = client.get("/api/evidence/300767.SZ/..%2Foutside/pdf")
+        self.assertIn(response.status_code, (400, 404))
+
+    def test_evidence_text_endpoint_returns_preview(self):
+        from backend.app import main
+
+        original_evidence_dir = main.EVIDENCE_DIR
+        evidence_id = "b" * 64
+        with tempfile.TemporaryDirectory() as temp_dir:
+            main.EVIDENCE_DIR = Path(temp_dir) / "evidence"
+            try:
+                ticker_dir = main.evidence_ticker_dir("300767.SZ")
+                text_dir = ticker_dir / "text"
+                text_dir.mkdir(parents=True, exist_ok=True)
+                text_path = text_dir / f"{evidence_id}.txt"
+                pages_path = text_dir / f"{evidence_id}.pages.json"
+                text_path.write_text("第一页内容\n第二页重大合同", encoding="utf-8")
+                pages_path.write_text(json.dumps({"pages": ["第一页内容", "第二页重大合同"]}, ensure_ascii=False), encoding="utf-8")
+                main.save_evidence_index("300767.SZ", [{
+                    "evidence_id": evidence_id,
+                    "ticker": "300767.SZ",
+                    "source_label": "CNINFO 公告原文",
+                    "title": "重大合同公告",
+                    "announcement_date": "2026-05-01",
+                    "category": "contract",
+                    "url": "https://static.cninfo.com.cn/b.pdf",
+                    "local_text_path": str(text_path),
+                    "local_pages_path": str(pages_path),
+                    "download_status": "downloaded",
+                    "text_extract_status": "ready",
+                    "snippets": [],
+                }])
+
+                response = client.get(f"/api/evidence/300767.SZ/{evidence_id}/text?page=2")
+                self.assertEqual(response.status_code, 200)
+                payload = response.json()
+                self.assertEqual(payload["page_count"], 2)
+                self.assertEqual(payload["text_preview"], "第二页重大合同")
+            finally:
+                main.EVIDENCE_DIR = original_evidence_dir
+
+    def test_evidence_source_endpoint_returns_metadata(self):
+        from backend.app import main
+
+        original_evidence_dir = main.EVIDENCE_DIR
+        evidence_id = "c" * 64
+        with tempfile.TemporaryDirectory() as temp_dir:
+            main.EVIDENCE_DIR = Path(temp_dir) / "evidence"
+            try:
+                ticker_dir = main.evidence_ticker_dir("300767.SZ")
+                ticker_dir.mkdir(parents=True, exist_ok=True)
+                main.save_evidence_index("300767.SZ", [{
+                    "evidence_id": evidence_id,
+                    "ticker": "300767.SZ",
+                    "source_label": "CNINFO 公告原文",
+                    "source_type": "official_financial_report",
+                    "grade": "A",
+                    "confidence": "high",
+                    "title": "年度报告",
+                    "announcement_date": "2026-04-30",
+                    "category": "annual_report",
+                    "url": "https://static.cninfo.com.cn/c.pdf",
+                    "download_status": "downloaded",
+                    "text_extract_status": "ready",
+                    "snippets": [{"quote": "营业收入增长", "page": 3}],
+                }])
+
+                response = client.get(f"/api/evidence/300767.SZ/{evidence_id}/source")
+                self.assertEqual(response.status_code, 200)
+                payload = response.json()
+                self.assertEqual(payload["grade"], "A")
+                self.assertEqual(payload["source_type"], "official_financial_report")
+                self.assertEqual(payload["snippet_pages"][0]["page"], 3)
+            finally:
+                main.EVIDENCE_DIR = original_evidence_dir
+
+    def test_evidence_detail_includes_grade_and_snippet_pages(self):
+        from backend.app import main
+
+        original_evidence_dir = main.EVIDENCE_DIR
+        evidence_id = "d" * 64
+        with tempfile.TemporaryDirectory() as temp_dir:
+            main.EVIDENCE_DIR = Path(temp_dir) / "evidence"
+            try:
+                ticker_dir = main.evidence_ticker_dir("300767.SZ")
+                ticker_dir.mkdir(parents=True, exist_ok=True)
+                main.save_evidence_index("300767.SZ", [{
+                    "evidence_id": evidence_id,
+                    "ticker": "300767.SZ",
+                    "source_label": "CNINFO 公告原文",
+                    "title": "合同公告",
+                    "announcement_date": "2026-05-01",
+                    "category": "contract",
+                    "url": "https://static.cninfo.com.cn/d.pdf",
+                    "download_status": "downloaded",
+                    "text_extract_status": "ready",
+                    "snippets": [{"quote": "签订重大合同", "page": 2}],
+                }])
+
+                response = client.get(f"/api/evidence/300767.SZ/{evidence_id}")
+                self.assertEqual(response.status_code, 200)
+                payload = response.json()
+                self.assertEqual(payload["source_type"], "official_announcement")
+                self.assertEqual(payload["snippet_pages"][0]["page"], 2)
+            finally:
+                main.EVIDENCE_DIR = original_evidence_dir
+
+class TrackingEvidenceRefTests(unittest.TestCase):
+    def test_tracking_dashboard_accepts_valid_evidence_refs(self):
+        from backend.app import main
+
+        evidence_id = "a" * 64
+        report = {"tracking_dashboard": [{
+            "trigger": "经营现金流改善",
+            "status": "watch",
+            "evidence": [],
+            "evidence_refs": [{"evidence_id": evidence_id, "quote": "经营现金流为正"}],
+        }]}
+        snapshot = {"evidence_library": {"items": [{
+            "evidence_id": evidence_id,
+            "title": "年度报告",
+            "source_label": "CNINFO 公告原文",
+            "url": "https://static.cninfo.com.cn/a.pdf",
+            "announcement_date": "2026-04-30",
+            "grade": "A",
+            "confidence": "high",
+            "snippets": [{"quote": "经营现金流为正", "page": 3}],
+        }]}}
+        main._validate_evidence_refs(report, snapshot)
+        row = report["tracking_dashboard"][0]
+        self.assertEqual(len(row["evidence_refs"]), 1)
+        self.assertEqual(row["evidence_refs"][0]["grade"], "A")
+        self.assertEqual(row["status"], "confirmed")
+
+    def test_tracking_dashboard_drops_invalid_evidence_refs(self):
+        from backend.app import main
+
+        report = {"tracking_dashboard": [{
+            "trigger": "订单恢复",
+            "status": "confirmed",
+            "evidence": [],
+            "evidence_refs": [{"evidence_id": "b" * 64, "quote": "不存在的引用"}],
+        }]}
+        snapshot = {"evidence_library": {"items": []}}
+        main._validate_evidence_refs(report, snapshot)
+        row = report["tracking_dashboard"][0]
+        self.assertEqual(row["evidence_refs"], [])
+        self.assertEqual(row["status"], "data_insufficient")
+
+    def test_tracking_dashboard_fallback_builds_refs_from_snippets(self):
+        from backend.app import main
+
+        evidence_id = "c" * 64
+        report = {"tracking_dashboard": [{
+            "trigger": "经营现金流持续为正",
+            "status": "watch",
+            "evidence": [],
+            "evidence_refs": [],
+        }]}
+        snapshot = {"evidence_library": {"items": [{
+            "evidence_id": evidence_id,
+            "title": "季度报告",
+            "source_label": "CNINFO 公告原文",
+            "url": "https://static.cninfo.com.cn/c.pdf",
+            "announcement_date": "2026-07-01",
+            "grade": "A",
+            "confidence": "high",
+            "snippets": [{"quote": "报告期经营现金流为正", "page": 2}],
+        }]}}
+        main._validate_evidence_refs(report, snapshot)
+        row = report["tracking_dashboard"][0]
+        self.assertTrue(row["evidence_refs"])
+        self.assertEqual(row["evidence_refs"][0]["evidence_id"], evidence_id)
+        self.assertEqual(row["status"], "confirmed")
+
+    def test_tracking_dashboard_status_reflects_evidence_grade(self):
+        from backend.app import main
+
+        evidence_id = "d" * 64
+        report = {"tracking_dashboard": [{
+            "trigger": "合同订单恢复",
+            "status": "watch",
+            "evidence": [],
+            "evidence_refs": [{"evidence_id": evidence_id, "quote": "签订重大合同"}],
+        }]}
+        snapshot = {"evidence_library": {"items": [{
+            "evidence_id": evidence_id,
+            "title": "合同公告",
+            "source_label": "CNINFO 公告原文",
+            "url": "https://static.cninfo.com.cn/d.pdf",
+            "announcement_date": "2026-06-01",
+            "grade": "C",
+            "confidence": "medium",
+            "snippets": [{"quote": "签订重大合同", "page": 1}],
+        }]}}
+        main._validate_evidence_refs(report, snapshot)
+        row = report["tracking_dashboard"][0]
+        self.assertEqual(row["status"], "watch")
+
+class PdfPaginationTests(unittest.TestCase):
+    def _html(self):
+        from backend.app import main
+
+        payload = {
+            "stock_name": "测试股份",
+            "ticker": "000001.SZ",
+            "report": {
+                "title": "测试深研报告",
+                "data_quality": "limited",
+                "core_view": "基本面待验证",
+                "investment_contradiction": {"summary": "核心矛盾"},
+                "tracking_dashboard": [{
+                    "trigger": "经营现金流改善",
+                    "status": "watch",
+                    "evidence": ["经营现金流为正"],
+                    "evidence_refs": [{
+                        "evidence_id": "a" * 64,
+                        "source_label": "CNINFO 公告原文",
+                        "quote": "经营现金流为正",
+                        "page": 2,
+                        "grade": "A",
+                    }],
+                }],
+                "evidence_display": {"items": []},
+            },
+            "input_snapshot": {"evidence_library": {"items": []}},
+        }
+        return main.build_research_pdf_html(payload)
+
+    def test_pdf_html_contains_pagination_css(self):
+        html = self._html()
+        self.assertIn("break-before:page", html)
+        self.assertIn("page-break-before:always", html)
+        self.assertIn("break-inside:avoid-page", html)
+
+    def test_pdf_html_contains_source_traceability_section(self):
+        html = self._html()
+        self.assertIn("证据来源追溯", html)
+        self.assertIn("a" * 12, html)
+
+    def test_pdf_html_keeps_evidence_cards_unsplittable(self):
+        html = self._html()
+        self.assertIn(".evidence-card{break-inside:avoid-page", html)
 
 if __name__ == "__main__":
     unittest.main()

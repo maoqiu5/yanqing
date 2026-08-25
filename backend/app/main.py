@@ -1,6 +1,7 @@
-﻿from __future__ import annotations
+from __future__ import annotations
 
 import json
+from enum import Enum
 import hashlib
 import signal
 import subprocess
@@ -61,10 +62,43 @@ class AutoResearchRequest(BaseModel):
     question: str = Field(default="", max_length=1200)
 
 
+
+class EvidenceGrade(str, Enum):
+    A = "A"
+    B = "B"
+    C = "C"
+    D = "D"
+
+
+class EvidenceConfidence(str, Enum):
+    HIGH = "high"
+    MEDIUM = "medium"
+    LOW = "low"
+
+
+class EvidenceRef(BaseModel):
+    evidence_id: str = ""
+    source_label: str = ""
+    quote: str = ""
+    page: int | None = None
+    source_url: str = ""
+    source_date: str = ""
+    grade: str = EvidenceGrade.D.value
+    confidence: str = "low"
+    field: str = ""
+    logic: str = ""
+
+
 class EvidenceItem(BaseModel):
     source: str
     quote: str = ""
     note: str = ""
+    evidence_id: str = ""
+    page: int | None = None
+    source_url: str = ""
+    source_date: str = ""
+    grade: str = EvidenceGrade.D.value
+    confidence: str = "low"
 
 
 class EvidenceDisplay(BaseModel):
@@ -75,7 +109,9 @@ class EvidenceDisplay(BaseModel):
 class ContradictionMatrixRow(BaseModel):
     claim: str = "数据不足"
     supporting_evidence: list[str] = Field(default_factory=list)
+    supporting_evidence_refs: list[EvidenceRef] = Field(default_factory=list)
     opposing_evidence: list[str] = Field(default_factory=list)
+    opposing_evidence_refs: list[EvidenceRef] = Field(default_factory=list)
     data_gaps: list[str] = Field(default_factory=list)
     tracking_triggers: list[str] = Field(default_factory=list)
 
@@ -85,6 +121,7 @@ class TrackingDashboardItem(BaseModel):
     status: str = "watch"
     why: str = "数据不足"
     evidence: list[str] = Field(default_factory=list)
+    evidence_refs: list[EvidenceRef] = Field(default_factory=list)
     next_check: str = "数据不足"
     invalidate_if: str = "数据不足"
 
@@ -100,6 +137,11 @@ class EvidenceSnippet(BaseModel):
     quote: str = ""
     note: str = ""
     page: int | None = None
+    page_label: str = ""
+    source_url: str = ""
+    source_date: str = ""
+    grade: str = EvidenceGrade.D.value
+    confidence: str = "low"
 
 
 class EvidenceRecord(BaseModel):
@@ -107,18 +149,89 @@ class EvidenceRecord(BaseModel):
     ticker: str
     source: str = "cninfo"
     source_label: str = "CNINFO 公告原文"
+    source_type: str = "official_announcement"
+    grade: str = EvidenceGrade.D.value
+    confidence: str = "low"
+    file_name: str = ""
+    retrieved_at: str = ""
     title: str
     announcement_date: str = ""
     category: str = "other"
     url: str = ""
     local_pdf_path: str = ""
     local_text_path: str = ""
+    local_pages_path: str = ""
     download_status: str = "skipped"
     text_extract_status: str = "skipped"
     snippet_count: int = 0
     text_length: int = 0
     snippets: list[EvidenceSnippet] = Field(default_factory=list)
     data_gaps: list[str] = Field(default_factory=list)
+
+def source_type_for_category(category: str) -> str:
+    if str(category or "") in {"annual_report", "semiannual_report", "quarterly_report"}:
+        return "official_financial_report"
+    return "official_announcement"
+
+
+def _downgrade_evidence_grade(grade: str) -> str:
+    order = (EvidenceGrade.A.value, EvidenceGrade.B.value, EvidenceGrade.C.value, EvidenceGrade.D.value)
+    try:
+        index = order.index(str(grade or EvidenceGrade.D.value))
+    except ValueError:
+        return EvidenceGrade.D.value
+    return order[min(index + 1, len(order) - 1)]
+
+
+def grade_evidence_record(item: dict[str, Any]) -> tuple[str, str]:
+    source_type = str(item.get("source_type") or source_type_for_category(item.get("category") or ""))
+    category = str(item.get("category") or "other")
+
+    if source_type == "official_financial_report":
+        grade = EvidenceGrade.A.value
+        confidence = "high"
+    elif source_type == "official_announcement":
+        grade = EvidenceGrade.B.value
+        confidence = "high" if category in {"forecast", "contract"} else "medium"
+    elif source_type in {"exchange_reply", "policy", "tender_order"}:
+        grade = EvidenceGrade.B.value if source_type in {"policy", "tender_order"} else EvidenceGrade.C.value
+        confidence = "medium"
+    else:
+        grade = EvidenceGrade.C.value
+        confidence = "medium"
+
+    if not item.get("evidence_id") or not item.get("url"):
+        return EvidenceGrade.D.value, "low"
+
+    download_status = str(item.get("download_status") or "")
+    text_status = str(item.get("text_extract_status") or "")
+    if download_status != "downloaded" or text_status != "ready":
+        grade = _downgrade_evidence_grade(grade)
+        if grade == EvidenceGrade.D.value:
+            confidence = "low"
+        elif confidence == "high":
+            confidence = "medium"
+
+    gaps = [str(gap) for gap in item.get("data_gaps") or [] if str(gap).strip()]
+    if any(("下载失败" in gap or "提取失败" in gap or "数据不足" in gap) for gap in gaps):
+        grade = _downgrade_evidence_grade(grade)
+        confidence = "low"
+
+    return grade, confidence
+
+
+def confidence_for_evidence(item: dict[str, Any], snippet: dict[str, Any] | None = None) -> str:
+    _, confidence = grade_evidence_record(item)
+    if snippet is None:
+        return confidence
+    if not str(snippet.get("quote") or "").strip():
+        return "low"
+    if confidence == "high" and snippet.get("page") is None:
+        return "medium"
+    if confidence == "medium" and snippet.get("page") is not None:
+        return "high"
+    return confidence
+
 
 
 class EvidenceLibrary(BaseModel):
@@ -214,10 +327,61 @@ def evidence_list(ticker: str) -> dict[str, Any]:
     }
 
 
+def _find_evidence_item(ticker: str, evidence_id: str) -> dict[str, Any] | None:
+    normalized = normalize_ts_code(ticker)
+    for row in load_evidence_index(normalized):
+        if str(row.get("evidence_id")) == evidence_id:
+            return _normalize_evidence_record(row)
+    return None
+
+
+def _load_evidence_pages(item: dict[str, Any]) -> list[str]:
+    pages_path = str(item.get("local_pages_path") or "")
+    if pages_path:
+        try:
+            payload = json.loads(Path(pages_path).read_text(encoding="utf-8"))
+            pages = payload.get("pages") if isinstance(payload, dict) else None
+            if isinstance(pages, list):
+                return [str(page) for page in pages]
+        except Exception:
+            pass
+    text_path = str(item.get("local_text_path") or "")
+    if text_path:
+        try:
+            candidate = Path(text_path).resolve()
+            candidate.relative_to(evidence_ticker_dir(str(item.get("ticker") or "")).resolve())
+            if candidate.is_file():
+                return [candidate.read_text(encoding="utf-8")]
+        except Exception:
+            pass
+    return []
+
+
+def _resolve_evidence_file(ticker: str, evidence_id: str, kind: str) -> Path:
+    if not re.fullmatch(r"[0-9a-f]{64}", evidence_id):
+        raise HTTPException(status_code=400, detail="invalid evidence id")
+    ticker_root = evidence_ticker_dir(ticker).resolve()
+    if kind == "pdf":
+        relative = Path("documents") / f"{evidence_id}.pdf"
+    elif kind == "text":
+        relative = Path("text") / f"{evidence_id}.txt"
+    elif kind == "pages":
+        relative = Path("text") / f"{evidence_id}.pages.json"
+    else:
+        raise HTTPException(status_code=400, detail="invalid evidence kind")
+    candidate = (ticker_root / relative).resolve()
+    try:
+        candidate.relative_to(ticker_root)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="invalid evidence path") from exc
+    if not candidate.is_file():
+        raise HTTPException(status_code=404, detail="evidence file not found")
+    return candidate
+
+
 @app.get("/api/evidence/{ticker}/{evidence_id}")
 def evidence_detail(ticker: str, evidence_id: str) -> dict[str, Any]:
-    normalized = normalize_ts_code(ticker)
-    item = next((row for row in load_evidence_index(normalized) if str(row.get("evidence_id")) == evidence_id), None)
+    item = _find_evidence_item(ticker, evidence_id)
     if item is None:
         raise HTTPException(status_code=404, detail="evidence not found")
 
@@ -226,11 +390,66 @@ def evidence_detail(ticker: str, evidence_id: str) -> dict[str, Any]:
     if text_path:
         try:
             candidate = Path(text_path).resolve()
-            candidate.relative_to(evidence_ticker_dir(normalized).resolve())
+            candidate.relative_to(evidence_ticker_dir(ticker).resolve())
             if candidate.is_file():
                 result["text_preview"] = candidate.read_text(encoding="utf-8")[:5000]
         except (OSError, UnicodeError, ValueError, HTTPException):
             pass
+    result["snippet_pages"] = [
+        {"page": snippet.get("page"), "quote": snippet.get("quote")}
+        for snippet in (result.get("snippets") or [])
+        if isinstance(snippet, dict)
+    ]
+    return result
+
+
+@app.get("/api/evidence/{ticker}/{evidence_id}/pdf")
+def evidence_pdf(ticker: str, evidence_id: str) -> FileResponse:
+    path = _resolve_evidence_file(ticker, evidence_id, "pdf")
+    return FileResponse(path, media_type="application/pdf", filename=path.name, content_disposition_type="inline")
+
+
+@app.get("/api/evidence/{ticker}/{evidence_id}/text")
+def evidence_text(ticker: str, evidence_id: str, page: int | None = Query(default=None, ge=1)) -> dict[str, Any]:
+    item = _find_evidence_item(ticker, evidence_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="evidence not found")
+    pages = _load_evidence_pages(item)
+    if not pages:
+        raise HTTPException(status_code=404, detail="evidence text not found")
+    page_count = len(pages)
+    if page is not None and page > page_count:
+        raise HTTPException(status_code=404, detail="page not found")
+    if page is not None:
+        text_preview = pages[page - 1][:5000]
+    else:
+        text_preview = "\n".join(pages)[:5000]
+    return {
+        "evidence_id": item.get("evidence_id"),
+        "ticker": item.get("ticker"),
+        "title": item.get("title"),
+        "source_url": item.get("url"),
+        "source_label": item.get("source_label"),
+        "grade": item.get("grade"),
+        "page": page,
+        "page_count": page_count,
+        "text_preview": text_preview,
+    }
+
+
+@app.get("/api/evidence/{ticker}/{evidence_id}/source")
+def evidence_source(ticker: str, evidence_id: str) -> dict[str, Any]:
+    item = _find_evidence_item(ticker, evidence_id)
+    if item is None:
+        raise HTTPException(status_code=404, detail="evidence not found")
+    pages = _load_evidence_pages(item)
+    result = dict(item)
+    result["page_count"] = len(pages)
+    result["snippet_pages"] = [
+        {"page": snippet.get("page"), "quote": snippet.get("quote")}
+        for snippet in (result.get("snippets") or [])
+        if isinstance(snippet, dict)
+    ]
     return result
 
 
@@ -625,18 +844,25 @@ def download_cninfo_pdf(record: dict[str, Any]) -> dict[str, Any]:
     return updated
 
 
-def extract_pdf_text(pdf_path: Path) -> tuple[str, str]:
+def extract_pdf_text_pages(pdf_path: Path) -> tuple[list[str], str]:
     try:
         from pypdf import PdfReader
 
         reader = PdfReader(str(pdf_path))
-        text = "\n".join(page.extract_text() or "" for page in reader.pages)
-        return text[:120000], "ready"
+        pages = [page.extract_text() or "" for page in reader.pages]
+        return pages, "ready"
     except Exception:
-        return "", "failed"
+        return [], "failed"
 
 
-def build_evidence_snippets(text: str, title: str, limit: int = 3) -> list[dict[str, Any]]:
+def extract_pdf_text(pdf_path: Path) -> tuple[str, str]:
+    pages, status = extract_pdf_text_pages(pdf_path)
+    if status != "ready":
+        return "", status
+    return "\n".join(pages)[:120000], "ready"
+
+
+def build_evidence_snippets(text: str, title: str, limit: int = 3, pages: list[str] | None = None) -> list[dict[str, Any]]:
     bounded_limit = max(0, int(limit))
     if not bounded_limit:
         return []
@@ -652,19 +878,36 @@ def build_evidence_snippets(text: str, title: str, limit: int = 3) -> list[dict[
         "诉讼",
         "监管",
     )
-    sentences = [part.strip() for part in re.split(r"[。！？!?；;\n\r]+", str(text or "")) if part.strip()]
-    ranked = sorted(
-        enumerate(sentences),
-        key=lambda item: (sum(keyword in item[1] for keyword in keywords), -item[0]),
-        reverse=True,
-    )
+    if pages:
+        candidates: list[tuple[int, str]] = []
+        for page_index, page_text in enumerate(pages, start=1):
+            for part in re.split(r"[。！？!?；;\n\r]+", str(page_text or "")):
+                sentence = part.strip()
+                if sentence:
+                    candidates.append((page_index, sentence))
+        ranked = sorted(
+            enumerate(candidates),
+            key=lambda item: (sum(keyword in item[1][1] for keyword in keywords), -item[0]),
+            reverse=True,
+        )
+    else:
+        sentences = [part.strip() for part in re.split(r"[。！？!?；;\n\r]+", str(text or "")) if part.strip()]
+        ranked = sorted(
+            enumerate(sentences),
+            key=lambda item: (sum(keyword in item[1] for keyword in keywords), -item[0]),
+            reverse=True,
+        )
     snippets: list[dict[str, Any]] = []
-    for _, sentence in ranked[:bounded_limit]:
+    for rank_item in ranked[:bounded_limit]:
+        if pages:
+            page_number, sentence = rank_item[1]
+        else:
+            page_number, sentence = None, rank_item[1]
         quote = sentence[:239]
         snippets.append({
             "quote": quote,
             "note": f"{title.strip() or '公告'}中的研究关键词句",
-            "page": None,
+            "page": page_number,
         })
     return snippets
 
@@ -678,6 +921,7 @@ def summarize_evidence_library(items: list[dict[str, Any]]) -> dict[str, Any]:
     latest_announcement_date = ""
     category_counts: dict[str, int] = {}
     source_counts: dict[str, int] = {}
+    grade_counts: dict[str, int] = {"A": 0, "B": 0, "C": 0, "D": 0}
     data_gaps: list[str] = []
 
     for item in summary_items:
@@ -698,6 +942,11 @@ def summarize_evidence_library(items: list[dict[str, Any]]) -> dict[str, Any]:
         source_label = str(item.get("source_label") or item.get("source") or "cninfo")
         source_counts[source_label] = source_counts.get(source_label, 0) + 1
 
+        grade = str(item.get("grade") or "").strip()
+        if not grade or grade == EvidenceGrade.D.value:
+            grade, _ = grade_evidence_record(item)
+        grade_counts[grade] = grade_counts.get(grade, 0) + 1
+
         for gap in item.get("data_gaps") or []:
             gap_text = str(gap).strip()
             if gap_text and gap_text not in data_gaps:
@@ -710,6 +959,7 @@ def summarize_evidence_library(items: list[dict[str, Any]]) -> dict[str, Any]:
         "snippet_count": snippet_count,
         "text_length": text_length,
         "latest_announcement_date": latest_announcement_date,
+        "grade_summary": grade_counts,
         "category_counts": category_counts,
         "source_counts": source_counts,
         "data_gaps": data_gaps,
@@ -735,9 +985,37 @@ def _evidence_item_text_length(item: dict[str, Any]) -> int:
 def _normalize_evidence_record(item: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(item)
     normalized["source_label"] = str(normalized.get("source_label") or normalized.get("source") or "CNINFO 公告原文")
+    category = str(normalized.get("category") or "other")
+    if not str(normalized.get("source_type") or "").strip():
+        normalized["source_type"] = source_type_for_category(category)
+    current_grade = str(normalized.get("grade") or "").strip()
+    if not current_grade or current_grade == EvidenceGrade.D.value:
+        normalized["grade"], normalized["confidence"] = grade_evidence_record(normalized)
+    elif not str(normalized.get("confidence") or "").strip():
+        _, normalized["confidence"] = grade_evidence_record(normalized)
+    if not str(normalized.get("file_name") or "").strip():
+        local_pdf_path = str(normalized.get("local_pdf_path") or "")
+        normalized["file_name"] = Path(local_pdf_path).name if local_pdf_path else ""
+    normalized.setdefault("retrieved_at", "")
+    normalized.setdefault("local_pages_path", "")
     snippets = normalized.get("snippets")
     if isinstance(snippets, list):
         normalized["snippet_count"] = sum(1 for snippet in snippets if isinstance(snippet, dict))
+        enriched_snippets = []
+        for snippet in snippets:
+            if not isinstance(snippet, dict):
+                enriched_snippets.append(snippet)
+                continue
+            item_snippet = dict(snippet)
+            item_snippet["source_url"] = str(item_snippet.get("source_url") or normalized.get("url") or "")
+            item_snippet["source_date"] = str(item_snippet.get("source_date") or normalized.get("announcement_date") or "")
+            if not str(item_snippet.get("grade") or "").strip():
+                item_snippet["grade"] = normalized.get("grade") or EvidenceGrade.D.value
+            if not str(item_snippet.get("confidence") or "").strip():
+                item_snippet["confidence"] = confidence_for_evidence(normalized, item_snippet)
+            item_snippet["page_label"] = str(item_snippet.get("page_label") or ("第{}页".format(item_snippet["page"]) if item_snippet.get("page") is not None else ""))
+            enriched_snippets.append(item_snippet)
+        normalized["snippets"] = enriched_snippets
     elif not isinstance(normalized.get("snippet_count"), int):
         normalized["snippet_count"] = 0
     if not isinstance(normalized.get("text_length"), int):
@@ -826,7 +1104,7 @@ def refresh_evidence_for_ticker(ticker: str, request: EvidenceRefreshRequest) ->
         if request.extract_text and current.get("download_status") == "downloaded":
             try:
                 pdf_path = Path(str(current.get("local_pdf_path") or ""))
-                text, status = extract_pdf_text(pdf_path) if pdf_path.is_file() else ("", "failed")
+                pages, status = extract_pdf_text_pages(pdf_path) if pdf_path.is_file() else ([], "failed")
                 if status == "ready":
                     evidence_id = str(current.get("evidence_id") or "")
                     if not re.fullmatch(r"[0-9a-f]{64}", evidence_id):
@@ -838,9 +1116,14 @@ def refresh_evidence_for_ticker(ticker: str, request: EvidenceRefreshRequest) ->
                     resolved_text_dir.relative_to(ticker_root)
                     text_path = (resolved_text_dir / f"{evidence_id}.txt").resolve()
                     text_path.relative_to(resolved_text_dir)
+                    pages_path = (resolved_text_dir / f"{evidence_id}.pages.json").resolve()
+                    pages_path.relative_to(resolved_text_dir)
+                    text = "\n".join(pages)[:120000]
                     text_path.write_text(text, encoding="utf-8")
+                    pages_path.write_text(json.dumps({"pages": pages}, ensure_ascii=False), encoding="utf-8")
                     current["local_text_path"] = str(text_path)
-                    current["snippets"] = build_evidence_snippets(text, str(current.get("title") or ""))
+                    current["local_pages_path"] = str(pages_path)
+                    current["snippets"] = build_evidence_snippets(text, str(current.get("title") or ""), pages=pages)
                     current["snippet_count"] = len(current.get("snippets") or [])
                     current["text_length"] = len(text)
                     current["text_extract_status"] = "ready"
@@ -854,7 +1137,7 @@ def refresh_evidence_for_ticker(ticker: str, request: EvidenceRefreshRequest) ->
                 if gap not in gaps:
                     gaps.append(gap)
                 current["data_gaps"] = gaps
-        refreshed_items.append(current)
+        refreshed_items.append(_normalize_evidence_record(current))
 
     merged = merge_evidence_records(existing, refreshed_items)
     save_evidence_index(normalized, merged)
@@ -917,9 +1200,11 @@ def build_evidence_digest(snapshot: dict[str, Any]) -> dict[str, Any]:
         if not isinstance(item, dict):
             continue
         title = str(item.get("title") or "")
-        snippets = item.get("snippets") if isinstance(item.get("snippets"), list) else []
-        text_chunks = [title] + [str(snippet.get("quote") or "") for snippet in snippets if isinstance(snippet, dict)]
-        for chunk in text_chunks:
+        snippets = [s for s in (item.get("snippets") or []) if isinstance(s, dict)]
+        text_chunks = [(title, None)] + [(str(s.get("quote") or ""), s) for s in snippets]
+        for chunk, source_snippet in text_chunks:
+            if not chunk:
+                continue
             topics = evidence_topics_for_text(chunk)
             if not topics:
                 continue
@@ -932,6 +1217,10 @@ def build_evidence_digest(snapshot: dict[str, Any]) -> dict[str, Any]:
                     "evidence_id": str(item.get("evidence_id") or ""),
                     "date": str(item.get("announcement_date") or ""),
                     "category": str(item.get("category") or "other"),
+                    "source_type": str(item.get("source_type") or source_type_for_category(item.get("category") or "")),
+                    "grade": str(item.get("grade") or EvidenceGrade.D.value),
+                    "confidence": str(item.get("confidence") or "low"),
+                    "page": source_snippet.get("page") if source_snippet and source_snippet.get("page") is not None else None,
                 })
 
     financial_facts = build_financial_digest_facts(snapshot)
@@ -1210,6 +1499,93 @@ def build_contradiction_matrix(report: dict[str, Any]) -> list[dict[str, Any]]:
     }]
 
 
+def _all_evidence_keywords() -> tuple[str, ...]:
+    return tuple(keyword for _, _, keywords in EVIDENCE_DIGEST_TOPICS for keyword in keywords)
+
+
+def _build_evidence_refs_for_trigger(trigger: str, items: list[Any], limit: int = 3) -> list[dict[str, Any]]:
+    bounded_limit = max(0, int(limit))
+    if not bounded_limit:
+        return []
+    keywords = tuple(keyword for keyword in _all_evidence_keywords() if keyword in str(trigger or ""))
+    refs: list[dict[str, Any]] = []
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        for snippet in item.get("snippets") or []:
+            if not isinstance(snippet, dict):
+                continue
+            quote = str(snippet.get("quote") or "").strip()
+            title = str(item.get("title") or "")
+            if keywords and not any(keyword in quote or keyword in title for keyword in keywords):
+                continue
+            refs.append({
+                "evidence_id": str(item.get("evidence_id") or ""),
+                "source_label": str(item.get("source_label") or item.get("source") or "CNINFO 公告原文"),
+                "quote": quote or title,
+                "page": snippet.get("page"),
+                "source_url": str(item.get("url") or ""),
+                "source_date": str(item.get("announcement_date") or ""),
+                "grade": str(item.get("grade") or EvidenceGrade.D.value),
+                "confidence": str(snippet.get("confidence") or item.get("confidence") or "low"),
+                "field": "",
+                "logic": f"匹配触发器关键词：{trigger}",
+            })
+            if len(refs) >= bounded_limit:
+                return refs
+    return refs
+
+
+def _validate_evidence_refs(report: dict[str, Any], snapshot: dict[str, Any]) -> None:
+    library = snapshot.get("evidence_library") if isinstance(snapshot.get("evidence_library"), dict) else {}
+    items = library.get("items") if isinstance(library.get("items"), list) else []
+    items_by_id = {str(item.get("evidence_id")): item for item in items if isinstance(item, dict)}
+    dashboard = report.get("tracking_dashboard")
+    if not isinstance(dashboard, list):
+        return
+    for row in dashboard:
+        if not isinstance(row, dict):
+            continue
+        trigger = str(row.get("trigger") or "").strip()
+        raw_refs = row.get("evidence_refs") if isinstance(row.get("evidence_refs"), list) else []
+        valid_refs: list[dict[str, Any]] = []
+        for ref in raw_refs:
+            if not isinstance(ref, dict):
+                continue
+            ref = dict(ref)
+            evidence_id = str(ref.get("evidence_id") or "")
+            item = items_by_id.get(evidence_id)
+            if item is None:
+                continue
+            quote = str(ref.get("quote") or "").strip()
+            snippet_texts = [str(snippet.get("quote") or "") for snippet in item.get("snippets") or [] if isinstance(snippet, dict)]
+            if quote and not any(quote in text for text in snippet_texts) and quote not in str(item.get("title") or ""):
+                continue
+            snippet = next((s for s in item.get("snippets") or [] if isinstance(s, dict) and quote and str(s.get("quote") or "") == quote), None)
+            if not isinstance(snippet, dict) and snippet_texts:
+                snippet = next((s for s in item.get("snippets") or [] if isinstance(s, dict)), None)
+            ref.setdefault("source_label", str(item.get("source_label") or item.get("source") or "CNINFO 公告原文"))
+            ref.setdefault("source_url", str(item.get("url") or ""))
+            ref.setdefault("source_date", str(item.get("announcement_date") or ""))
+            ref.setdefault("grade", str(item.get("grade") or EvidenceGrade.D.value))
+            ref.setdefault("confidence", str(snippet.get("confidence") if isinstance(snippet, dict) else item.get("confidence") or "low"))
+            if ref.get("page") is None and isinstance(snippet, dict):
+                ref["page"] = snippet.get("page")
+            valid_refs.append(ref)
+        if not valid_refs:
+            valid_refs = _build_evidence_refs_for_trigger(trigger, items, limit=3)
+        row["evidence_refs"] = valid_refs
+        if not valid_refs:
+            row["status"] = "data_insufficient"
+            if not row.get("evidence"):
+                row["evidence"] = ["数据不足：缺少当前证据"]
+        elif str(row.get("status")) != "invalidated":
+            has_strong = any(str(ref.get("grade")) in {"A", "B"} for ref in valid_refs)
+            row["status"] = "confirmed" if has_strong else "watch"
+            if not row.get("evidence"):
+                row["evidence"] = [str(ref.get("quote") or ref.get("source_label") or "证据") for ref in valid_refs[:4]]
+
+
 def build_tracking_dashboard(report: dict[str, Any]) -> list[dict[str, Any]]:
     existing = report.get("tracking_dashboard")
     if isinstance(existing, list) and existing:
@@ -1228,6 +1604,7 @@ def build_tracking_dashboard(report: dict[str, Any]) -> list[dict[str, Any]]:
                 "status": status,
                 "why": str(row.get("why") or "数据不足").strip() or "数据不足",
                 "evidence": _clean_text_items(row.get("evidence"), limit=4) or ["数据不足：缺少当前证据"],
+                "evidence_refs": [dict(ref) for ref in row.get("evidence_refs") or [] if isinstance(ref, dict)],
                 "next_check": str(row.get("next_check") or "下一期财报、公告或订单披露继续核实").strip(),
                 "invalidate_if": str(row.get("invalidate_if") or "触发器未出现或反向证据增强").strip(),
             })
@@ -1540,6 +1917,7 @@ def _validate_snapshot_evidence(report: dict[str, Any], snapshot: dict[str, Any]
 
     _sanitize_report_evidence(report, allowed_texts, bool(items))
     _build_evidence_display(report)
+    _validate_evidence_refs(report, snapshot)
 
 
 def _schema_hint() -> dict[str, Any]:
@@ -1576,6 +1954,7 @@ def _schema_hint() -> dict[str, Any]:
             "status": "watch | data_insufficient | confirmed | invalidated",
             "why": "为什么该触发器能验证或推翻核心矛盾",
             "evidence": ["当前已有证据或结构化事实；没有则写数据不足"],
+            "evidence_refs": [{"evidence_id": "证据库中的64位ID", "quote": "快照中存在的引用句", "page": 3}],
             "next_check": "下一步检查的财报、公告、订单、政策或字段",
             "invalidate_if": "什么情况会推翻当前判断",
         }],
@@ -1768,6 +2147,7 @@ def build_research_pdf_html(payload: dict[str, Any]) -> str:
         _evidence_digest_pdf(digest),
         _cards("调研问题", [("待核实", _list_html(report.get("research_questions")))]),
         _cards("证据链", [(str(item.get("source") or "来源不足"), f"<p>{_h(item.get('quote') or '数据不足')}</p><span>{_h(item.get('note') or '')}</span>") for item in evidence_items] or [("数据不足", "<span>当前没有可直接展示的可追溯证据。</span>")]),
+        _source_traceability_pdf(report, snapshot),
         _evidence_library_pdf(library),
         "</main>",
     ]
@@ -1800,16 +2180,19 @@ def _list_html(items: Any) -> str:
     return "<ul>" + "".join(f"<li>{_h(item)}</li>" for item in values) + "</ul>"
 
 
-def _section(title: str, inner_html: str) -> str:
-    return f'<section class="panel"><h2>{_h(title)}</h2>{inner_html}</section>'
+def _section(title: str, inner_html: str, extra_class: str = "") -> str:
+    css_class = "panel"
+    if extra_class:
+        css_class += f" {extra_class}"
+    return f'<section class="{css_class}"><h2>{_h(title)}</h2>{inner_html}</section>'
 
 
 def _metrics(items: list[tuple[str, Any, Any]]) -> str:
     return '<section class="metrics">' + "".join(f'<article class="metric"><span>{_h(label)}</span><strong>{_h(value)}</strong><small>{_h(note)}</small></article>' for label, value, note in items) + "</section>"
 
 
-def _cards(title: str, cards: list[tuple[str, str]]) -> str:
-    return _section(title, '<div class="grid">' + "".join(f'<article class="card"><strong>{_h(card_title)}</strong>{inner}</article>' for card_title, inner in cards) + "</div>")
+def _cards(title: str, cards: list[tuple[str, str]], extra_class: str = "") -> str:
+    return _section(title, '<div class="grid">' + "".join(f'<article class="card"><strong>{_h(card_title)}</strong>{inner}</article>' for card_title, inner in cards) + "</div>", extra_class=extra_class)
 
 
 def _judgement_pdf(judgement: dict[str, Any], report: dict[str, Any]) -> str:
@@ -1820,7 +2203,7 @@ def _judgement_pdf(judgement: dict[str, Any], report: dict[str, Any]) -> str:
         (_dig(judgement, "upside_case", "title") or "增强情景", f"<p>{_h(_dig(judgement, 'upside_case', 'description') or '数据不足')}</p><span>增强条件</span>{_list_html(judgement.get('strengthen_conditions'))}"),
         (_dig(judgement, "downside_case", "title") or "削弱情景", f"<p>{_h(_dig(judgement, 'downside_case', 'description') or '数据不足')}</p><span>削弱条件</span>{_list_html(judgement.get('weaken_conditions'))}"),
     ]
-    return _section("当前研判", f'<p class="core">{_h(conclusion)}</p><p class="snapshot">置信度：{_h(confidence.get("level") or "数据不足")} · {_h(confidence.get("reason") or "")}</p><div class="grid">' + "".join(f'<article class="card"><strong>{_h(title)}</strong>{inner}</article>' for title, inner in cards) + "</div>")
+    return _section("当前研判", f'<p class="core">{_h(conclusion)}</p><p class="snapshot">置信度：{_h(confidence.get("level") or "数据不足")} · {_h(confidence.get("reason") or "")}</p><div class="grid">' + "".join(f'<article class="card"><strong>{_h(title)}</strong>{inner}</article>' for title, inner in cards) + "</div>", extra_class="page-break")
 
 
 def _matrix_pdf(rows: list[Any]) -> str:
@@ -1829,7 +2212,7 @@ def _matrix_pdf(rows: list[Any]) -> str:
         if not isinstance(row, dict):
             continue
         cards.append((row.get("claim") or "数据不足", f"<span>支持证据</span>{_list_html(row.get('supporting_evidence'))}<span>反向证据</span>{_list_html(row.get('opposing_evidence'))}<span>数据缺口</span>{_list_html(row.get('data_gaps'))}<span>跟踪触发器</span>{_list_html(row.get('tracking_triggers'))}"))
-    return _cards("核心矛盾证据矩阵", cards or [("数据不足", _list_html([]))])
+    return _cards("核心矛盾证据矩阵", cards or [("数据不足", _list_html([]))], extra_class="page-break")
 
 
 def _dashboard_pdf(items: list[Any]) -> str:
@@ -1839,7 +2222,7 @@ def _dashboard_pdf(items: list[Any]) -> str:
         if not isinstance(item, dict):
             continue
         cards.append((item.get("trigger") or "数据不足", f"<span>状态：{_h(status_text.get(str(item.get('status')), item.get('status') or '观察中'))}</span><p>{_h(item.get('why') or '数据不足')}</p><span>当前证据</span>{_list_html(item.get('evidence'))}<span>下一步检查</span><p>{_h(item.get('next_check') or '数据不足')}</p><span>推翻条件</span><p>{_h(item.get('invalidate_if') or '数据不足')}</p>"))
-    return _cards("跟踪触发器仪表盘", cards or [("数据不足", _list_html([]))])
+    return _cards("跟踪触发器仪表盘", cards or [("数据不足", _list_html([]))], extra_class="page-break")
 
 
 def _financial_trace_pdf(trace: dict[str, Any]) -> str:
@@ -1850,7 +2233,7 @@ def _financial_trace_pdf(trace: dict[str, Any]) -> str:
             continue
         cards.append((item.get("label") or item.get("field_key") or "字段", f"<span>{_h(item.get('period') or '数据不足')} · {_h(item.get('source_label') or item.get('source') or '')}</span><p>{_h(item.get('value') or '数据不足')} {_h(item.get('unit') or '')}</p><span>解释</span><p>{_h(item.get('interpretation') or '数据不足')}</p><span>风险</span><p>{_h(item.get('risk') or '数据不足')}</p>"))
     gap = "；".join(str(gap) for gap in trace.get("data_gaps") or []) or "无"
-    return _section("财报字段追溯", f'<p class="snapshot">状态：{_h(trace.get("status") or "insufficient")} · 数据缺口：{_h(gap)}</p><div class="grid">' + "".join(f'<article class="card"><strong>{_h(title)}</strong>{inner}</article>' for title, inner in (cards or [("数据不足", "<span>当前快照没有可追溯的财报字段。</span>")])) + "</div>")
+    return _section("财报字段追溯", f'<p class="snapshot">状态：{_h(trace.get("status") or "insufficient")} · 数据缺口：{_h(gap)}</p><div class="grid">' + "".join(f'<article class="card"><strong>{_h(title)}</strong>{inner}</article>' for title, inner in (cards or [("数据不足", "<span>当前快照没有可追溯的财报字段。</span>")])) + "</div>", extra_class="page-break")
 
 
 def _evidence_digest_pdf(digest: dict[str, Any]) -> str:
@@ -1862,7 +2245,7 @@ def _evidence_digest_pdf(digest: dict[str, Any]) -> str:
         if isinstance(item, dict):
             cards.append((item.get("label") or item.get("topic") or "证据", f"<span>{_h(item.get('source') or '-')} · {_h(item.get('date') or '-')}</span><p>{_h(item.get('quote') or '数据不足')}</p>"))
     gaps = "；".join(str(gap) for gap in digest.get("data_gaps") or []) or "无"
-    return _section("可用证据摘要", f'<p class="snapshot">状态：{_h(digest.get("status") or "insufficient")} · 数据缺口：{_h(gaps)}</p><div class="grid">' + "".join(f'<article class="card"><strong>{_h(title)}</strong>{inner}</article>' for title, inner in (cards or [("数据不足", "<span>当前没有可摘要的公告/财报证据。</span>")])) + f'</div><h2>待核实问题</h2>{_list_html(digest.get("open_questions"))}')
+    return _section("可用证据摘要", f'<p class="snapshot">状态：{_h(digest.get("status") or "insufficient")} · 数据缺口：{_h(gaps)}</p><div class="grid">' + "".join(f'<article class="card"><strong>{_h(title)}</strong>{inner}</article>' for title, inner in (cards or [("数据不足", "<span>当前没有可摘要的公告/财报证据。</span>")])) + f'</div><h2>待核实问题</h2>{_list_html(digest.get("open_questions"))}', extra_class="page-break")
 
 
 def _evidence_library_pdf(library: dict[str, Any]) -> str:
@@ -1882,16 +2265,53 @@ def _evidence_library_pdf(library: dict[str, Any]) -> str:
         ("摘录", summary.get("snippet_count") or 0, ""),
     ])
     gaps = "；".join(str(gap) for gap in summary.get("data_gaps") or []) or "无"
-    return _section("公告原文摘要", metrics + f'<p class="snapshot">最近公告：{_h(summary.get("latest_announcement_date") or "数据不足")} · 正文总长度：{_h(summary.get("text_length") or 0)} · 缺口：{_h(gaps)}</p><div class="grid">' + "".join(f'<article class="card evidence-card"><strong>{_h(title)}</strong>{inner}</article>' for title, inner in (cards or [("暂无公告原文", "<span>当前快照没有可展示的源文件证据。</span>")])) + "</div>")
+    return _section("公告原文摘要", metrics + f'<p class="snapshot">最近公告：{_h(summary.get("latest_announcement_date") or "数据不足")} · 正文总长度：{_h(summary.get("text_length") or 0)} · 缺口：{_h(gaps)}</p><div class="grid">' + "".join(f'<article class="card evidence-card"><strong>{_h(title)}</strong>{inner}</article>' for title, inner in (cards or [("暂无公告原文", "<span>当前快照没有可展示的源文件证据。</span>")])) + "</div>", extra_class="page-break")
+
+
+def _source_traceability_pdf(report: dict[str, Any], snapshot: dict[str, Any]) -> str:
+    refs: list[dict[str, Any]] = []
+
+    def add_ref(ref: Any) -> None:
+        if not isinstance(ref, dict) or not ref.get("evidence_id"):
+            return
+        if not any(existing.get("evidence_id") == ref.get("evidence_id") and existing.get("quote") == ref.get("quote") for existing in refs):
+            refs.append(ref)
+
+    for row in report.get("tracking_dashboard") or []:
+        if isinstance(row, dict):
+            for ref in row.get("evidence_refs") or []:
+                add_ref(ref)
+    for row in report.get("contradiction_matrix") or []:
+        if isinstance(row, dict):
+            for ref in row.get("supporting_evidence_refs") or []:
+                add_ref(ref)
+            for ref in row.get("opposing_evidence_refs") or []:
+                add_ref(ref)
+    evidence_display = report.get("evidence_display") if isinstance(report.get("evidence_display"), dict) else {}
+    for item in evidence_display.get("items") or []:
+        if isinstance(item, dict):
+            add_ref(item)
+
+    if not refs:
+        return _section("证据来源追溯", '<p class="snapshot">当前报告没有可追溯的结构化证据引用。</p>', extra_class="page-break")
+    rows = []
+    for ref in refs[:50]:
+        page_text = f" · 第{_h(str(ref.get('page')))}页" if ref.get("page") is not None else ""
+        rows.append((
+            f"{_h(ref.get('grade') or 'D')} · {_h(ref.get('source_label') or '来源')}",
+            f"<span>{_h(ref.get('source_date') or '')}{page_text}</span><p>{_h(ref.get('quote') or '')}</p><span>证据ID：{_h(str(ref.get('evidence_id') or '')[:12])}</span>",
+        ))
+    return _section("证据来源追溯", '<div class="grid">' + "".join(f'<article class="card"><strong>{_h(title)}</strong>{inner}</article>' for title, inner in rows) + "</div>", extra_class="page-break")
 
 
 def _pdf_css() -> str:
     return """<style>
 @page{size:A4;margin:14mm 12mm 16mm}
+@page{@bottom-center{content:counter(page) " / " counter(pages);font-size:9px;color:#647284}@bottom-right{content:"研擎深研报告";font-size:9px;color:#647284}}
 *{box-sizing:border-box}
 body{margin:0;background:#fff;color:#17212b;font-family:Arial,"Microsoft YaHei",sans-serif;font-size:12px;line-height:1.65}
 .report{width:100%}
-.cover{break-after:avoid;margin-bottom:12px;padding-bottom:10px;border-bottom:2px solid #195cff}
+.cover{break-after:page;page-break-after:always;margin-bottom:12px;padding-bottom:10px;border-bottom:2px solid #195cff}
 .cover p{margin:0;color:#647284;font-size:12px}
 .cover h1{margin:2px 0 4px;font-size:26px;line-height:1.25}
 .cover div{color:#647284}
@@ -1899,17 +2319,17 @@ h2{margin:0 0 8px;font-size:16px;line-height:1.35}
 p{margin:0 0 6px}
 ul{margin:0;padding-left:16px;color:#4e5f73}
 li{margin:0 0 3px}
-.panel{break-inside:avoid-page;margin:0 0 10px;padding:12px;border:1px solid #dbe4ef;border-radius:8px;background:#fff}
+.panel{break-inside:avoid-page;page-break-inside:avoid;margin:0 0 10px;padding:12px;border:1px solid #dbe4ef;border-radius:8px;background:#fff}
+.panel.page-break{break-before:page;page-break-before:always}
 .grid{display:grid;grid-template-columns:1fr 1fr;gap:8px}
 .metrics{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-bottom:10px}
-.metric,.card{break-inside:avoid-page;padding:10px;border:1px solid #dbe4ef;border-radius:8px;background:#f8fbff}
+.metric,.card{break-inside:avoid-page;page-break-inside:avoid;padding:10px;border:1px solid #dbe4ef;border-radius:8px;background:#f8fbff}
 .metric span,.card span,.snapshot{display:block;color:#647284;font-size:10.5px;line-height:1.55}
 .metric strong{display:block;font-size:17px;line-height:1.25;word-break:break-word}
 .card strong{display:block;margin-bottom:5px;color:#0f8f6f;font-size:13px}
 .core{padding:10px;border-left:4px solid #0f8f6f;border-radius:6px;background:#eaf8f3;line-height:1.8}
 .warn{color:#ad7414}
-.evidence-card{break-inside:auto}
-section:nth-of-type(4n+1){break-before:auto}
+.evidence-card{break-inside:avoid-page;page-break-inside:avoid}
 </style>"""
 
 
